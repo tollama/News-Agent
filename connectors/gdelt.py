@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 import httpx
 
-_MAX_RETRIES = 3
-_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+from connectors.http_utils import fetch_with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class GDELTConnector:
@@ -48,24 +50,24 @@ class GDELTConnector:
         if params:
             request_params.update(params)
 
+        logger.info("Fetching from GDELT: query='%s'", query)
+
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            for attempt in range(_MAX_RETRIES):
-                response = await client.get(
-                    f"{self._base_url}/doc/doc",
-                    params=request_params,
-                )
-                if response.status_code not in _RETRYABLE_STATUS:
-                    break
-                if attempt < _MAX_RETRIES - 1:
-                    import asyncio
-
-                    await asyncio.sleep(2**attempt)
-
+            response = await fetch_with_retry(
+                client,
+                f"{self._base_url}/doc/doc",
+                params=request_params,
+            )
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                logger.error("Invalid JSON response from GDELT for query '%s'", query)
+                return []
 
-        articles = data.get("articles", [])
-        return [_normalize_gdelt_article(a) for a in articles[:limit]]
+        articles = [_normalize_gdelt_article(a) for a in data.get("articles", [])[:limit]]
+        logger.info("Fetched %d articles from GDELT", len(articles))
+        return articles
 
 
 def _normalize_gdelt_article(raw: dict[str, Any]) -> dict[str, Any]:

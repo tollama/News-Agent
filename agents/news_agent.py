@@ -13,9 +13,11 @@ import pandas as pd
 
 from calibration.news_trust_score import compute_news_trust
 from connectors.base import NewsDataConnector
-from connectors.newsapi_normalizer import normalize_to_snapshot
+from connectors.normalizer_registry import normalize_article
 from features.build_features import build_news_features
 from schemas.signals import NewsSignal
+
+logger = __import__("logging").getLogger(__name__)
 
 
 class NewsAgent:
@@ -85,6 +87,14 @@ class NewsAgent:
         limit: int = 100,
     ) -> NewsSignal:
         """Fetch articles, compute features, and produce a NewsSignal."""
+        query = query.strip()
+        if not query:
+            return self._empty_signal("")
+
+        if from_date and to_date and from_date > to_date:
+            logger.warning("from_date (%s) > to_date (%s), swapping", from_date, to_date)
+            from_date, to_date = to_date, from_date
+
         # Collect articles from all connectors
         all_raw: list[dict[str, Any]] = []
         for connector in self._connectors:
@@ -99,8 +109,10 @@ class NewsAgent:
         if not all_raw:
             return self._empty_signal(query)
 
-        # Normalize to snapshots
-        snapshots = [normalize_to_snapshot(a) for a in all_raw]
+        logger.info("Fetched %d articles from %d connector(s)", len(all_raw), len(self._connectors))
+
+        # Normalize to snapshots (provider-aware dispatch)
+        snapshots = [normalize_article(a) for a in all_raw]
         df = pd.DataFrame([s.model_dump() for s in snapshots])
 
         # Build features
@@ -159,20 +171,20 @@ class NewsAgent:
         components = trust_result["components"]
         weights = trust_result["weights"]
         trust_score = trust_result["trust_score"]
+        component_breakdown = {
+            name: {"score": score, "weight": weights.get(name, 0.0)}
+            for name, score in components.items()
+        }
         return {
             "agent_name": self.agent_name,
             "domain": self.domain,
             "trust_score": trust_score,
             "risk_category": trust_result["risk_category"],
             "calibration_status": self._derive_calibration_status(trust_score),
-            "component_breakdown": {
-                name: {"score": score, "weight": weights.get(name, 0.0)}
-                for name, score in components.items()
-            },
+            "component_breakdown": component_breakdown,
             "violations": self._detect_violations(trust_score, signal),
-            "why_trusted": (
-                f"News trust score {trust_score:.2f} based on "
-                f"{signal.article_count} articles from '{signal.source_name}'"
+            "why_trusted": self._build_why_trusted(
+                trust_score, component_breakdown, signal.article_count,
             ),
             "evidence": {
                 "source_type": "news_feed",
@@ -185,6 +197,31 @@ class NewsAgent:
                 "agent_version": "0.1.0",
             },
         }
+
+    @staticmethod
+    def _build_why_trusted(
+        trust_score: float,
+        component_breakdown: dict[str, dict[str, float]],
+        article_count: int,
+    ) -> str:
+        """Build a human-readable trust explanation from component scores."""
+        if not component_breakdown:
+            return f"Trust score {trust_score:.2f} based on {article_count} article(s)."
+
+        # Sort by weighted contribution (score * weight), descending
+        ranked = sorted(
+            component_breakdown.items(),
+            key=lambda kv: kv[1].get("score", 0) * kv[1].get("weight", 0),
+            reverse=True,
+        )
+        top_name, top = ranked[0]
+        weak_name, weak = ranked[-1]
+        return (
+            f"Trust score {trust_score:.2f}: strongest factor is "
+            f"{top_name} ({top['score']:.0%}), "
+            f"weakest is {weak_name} ({weak['score']:.0%}), "
+            f"based on {article_count} article(s)."
+        )
 
     def _aggregate_to_signal(
         self,
