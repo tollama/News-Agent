@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import os
@@ -90,6 +91,29 @@ def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
     return get_agent().to_trust_payload(signal)
 
 
+def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize legacy adapter shapes to the raw NewsTrustPayload contract."""
+    normalized = dict(payload)
+    nested_payload = normalized.get("payload")
+    if isinstance(nested_payload, Mapping):
+        normalized = dict(nested_payload)
+
+    if normalized.get("contradiction_score") is None:
+        components = normalized.get("components")
+        if isinstance(components, Mapping):
+            contradiction_penalty = components.get("contradiction_penalty")
+            if contradiction_penalty is not None:
+                try:
+                    normalized["contradiction_score"] = max(
+                        0.0,
+                        min(1.0, 1.0 - float(contradiction_penalty)),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+    return normalized
+
+
 @app.get("/api/v1/news/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "news-agent"}
@@ -133,7 +157,7 @@ async def get_trust(story_id: str) -> dict[str, Any]:
             status_code=404,
             detail=f"story_id {story_id!r} not found in persisted trust artifacts",
         )
-    return payload
+    return _normalize_compat_payload(payload)
 
 
 @app.post("/api/v1/news/analyze")
