@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 import httpx
 
+from connectors.http_utils import fetch_with_retry
 
-_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
-_MAX_RETRIES = 3
+logger = logging.getLogger(__name__)
+
+_CACHE_TTL_SECONDS = 900  # 15 minutes
 
 
 class NewsAPIConnector:
@@ -27,6 +31,7 @@ class NewsAPIConnector:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     async def fetch_articles(
         self,
@@ -51,27 +56,38 @@ class NewsAPIConnector:
         if params:
             request_params.update(params)
 
+        # Check cache
+        cache_key = f"{query}|{from_date}|{to_date}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            ts, articles = cached
+            if time.monotonic() - ts < _CACHE_TTL_SECONDS:
+                logger.info("Cache hit for query '%s' (%d articles)", query, len(articles))
+                return articles[:limit]
+
         headers = {"X-Api-Key": self._api_key}
+        logger.info("Fetching from NewsAPI: query='%s'", query)
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            for attempt in range(_MAX_RETRIES):
-                response = await client.get(
-                    f"{self._base_url}/everything",
-                    params=request_params,
-                    headers=headers,
-                )
-                if response.status_code not in _RETRYABLE_STATUS:
-                    break
-                if attempt < _MAX_RETRIES - 1:
-                    import asyncio
-
-                    await asyncio.sleep(2**attempt)
-
+            response = await fetch_with_retry(
+                client,
+                f"{self._base_url}/everything",
+                params=request_params,
+                headers=headers,
+            )
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                logger.error("Invalid JSON response from NewsAPI for query '%s'", query)
+                return []
 
-        articles = data.get("articles", [])
-        return [_normalize_article(a) for a in articles[:limit]]
+        articles = [_normalize_article(a) for a in data.get("articles", [])[:limit]]
+        logger.info("Fetched %d articles from NewsAPI", len(articles))
+
+        # Store in cache
+        self._cache[cache_key] = (time.monotonic(), articles)
+        return articles
 
 
 def _normalize_article(raw: dict[str, Any]) -> dict[str, Any]:

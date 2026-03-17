@@ -7,24 +7,14 @@ from typing import Any
 
 from schemas.article import ArticleSnapshot
 from schemas.enums import NewsProvider
+from utils.datetime_helpers import parse_datetime
 
 from connectors.newsapi_normalizer import infer_category
 
 
 def normalize_to_snapshot(raw: dict[str, Any]) -> ArticleSnapshot:
     """Convert a normalized GDELT dict to an ArticleSnapshot."""
-    published_at = raw.get("published_at", "")
-    if isinstance(published_at, str) and published_at:
-        # GDELT uses YYYYMMDDHHMMSS format
-        try:
-            pub_dt = datetime.strptime(published_at, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
-        except ValueError:
-            try:
-                pub_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-            except ValueError:
-                pub_dt = datetime.now(UTC)
-    else:
-        pub_dt = datetime.now(UTC)
+    pub_dt = parse_datetime(raw.get("published_at", ""))
 
     headline = raw.get("headline", "untitled")
     return ArticleSnapshot(

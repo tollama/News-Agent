@@ -1,0 +1,82 @@
+"""Tests for pipelines.ingest_job."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import patch
+
+import pytest
+
+from agents.news_agent import NewsAgent
+from pipelines.ingest_job import NewsIngestPipeline
+from schemas.signals import NewsSignal
+from storage.writers import JsonlWriter
+
+
+def _make_signal(query: str = "test") -> NewsSignal:
+    now = datetime.now(UTC)
+    return NewsSignal(
+        story_id=f"story:{query}",
+        headline=f"Test headline for {query}",
+        source_name="Reuters",
+        published_at=now,
+        analyzed_at=now,
+        sentiment_score=-0.1,
+        entities=["Federal Reserve"],
+        source_credibility=0.9,
+        corroboration=0.7,
+        contradiction_score=0.1,
+        propagation_delay_seconds=60.0,
+        freshness_score=0.95,
+        novelty=0.6,
+        article_count=3,
+        query=query,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_full_pipeline_run():
+    agent = NewsAgent(connectors=[])
+    signal = _make_signal()
+
+    with patch.object(agent, "process_query", return_value=signal):
+        pipeline = NewsIngestPipeline(agent, queries=["test"])
+        results = await pipeline.run()
+
+    assert "signals" in results
+    assert "trust_results" in results
+    assert "trust_payloads" in results
+    assert len(results["trust_payloads"]) == 1
+    assert results["trust_payloads"][0]["story_id"] == "story:test"
+
+
+@pytest.mark.asyncio()
+async def test_pipeline_with_writer(tmp_path):
+    agent = NewsAgent(connectors=[])
+    signal = _make_signal()
+    writer = JsonlWriter(base_dir=str(tmp_path))
+
+    with patch.object(agent, "process_query", return_value=signal):
+        pipeline = NewsIngestPipeline(agent, queries=["test"], writer=writer)
+        await pipeline.run()
+
+    # Check that files were written
+    signals_dir = tmp_path / "signals"
+    payloads_dir = tmp_path / "trust_payloads"
+    assert signals_dir.exists()
+    assert payloads_dir.exists()
+
+
+@pytest.mark.asyncio()
+async def test_pipeline_resume():
+    agent = NewsAgent(connectors=[])
+    signal = _make_signal()
+
+    with patch.object(agent, "process_query", return_value=signal):
+        pipeline = NewsIngestPipeline(agent, queries=["test"])
+        # Run full first
+        await pipeline.run()
+        # Resume from trust stage
+        results = await pipeline.run(resume_from="trust")
+
+    assert "trust_results" in results

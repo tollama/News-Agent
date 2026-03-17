@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -10,10 +13,30 @@ from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
 
-app = FastAPI(title="News Agent", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 # Agent is initialized at startup
 _agent: NewsAgent | None = None
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Auto-bootstrap from config if agent not yet initialized."""
+    global _agent
+    if _agent is None:
+        try:
+            from configs.loader import bootstrap_agent, load_config
+
+            config = load_config()
+            if config:
+                _agent = bootstrap_agent(config)
+                logger.info("Agent bootstrapped from config at startup")
+        except Exception:
+            logger.exception("Failed to bootstrap agent from config")
+    yield
+
+
+app = FastAPI(title="News Agent", version="0.1.0", lifespan=_lifespan)
 
 
 class AnalyzeRequest(BaseModel):
@@ -53,12 +76,15 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/v1/news/signals")
 async def get_signals(
-    query: str = Query(..., min_length=1),
+    query: str = Query(..., min_length=1, max_length=500),
     from_date: datetime | None = Query(None, alias="from"),
     to_date: datetime | None = Query(None, alias="to"),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict[str, Any]:
     """Fetch and analyze news for the given query."""
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(status_code=400, detail="from_date must be <= to_date")
+    logger.info("GET /signals query='%s' limit=%d", query, limit)
     agent = get_agent()
     signal = await agent.process_query(
         query,

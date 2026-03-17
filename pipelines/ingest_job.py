@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from agents.news_agent import NewsAgent
+from storage.writers import JsonlWriter
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,13 @@ class NewsIngestPipeline:
         queries: list[str],
         lookback_hours: float = 24.0,
         limit_per_query: int = 100,
+        writer: JsonlWriter | None = None,
     ) -> None:
         self._agent = agent
         self._queries = queries
         self._lookback_hours = lookback_hours
         self._limit = limit_per_query
+        self._writer = writer
         self._checkpoint: StageName | None = None
         self._results: dict[str, Any] = {}
 
@@ -111,6 +114,16 @@ class NewsIngestPipeline:
                 payload = self._agent.to_trust_payload(signal)
                 payloads.append(payload)
             self._results["trust_payloads"] = payloads
+
+            # Persist artifacts if a writer is configured
+            if self._writer is not None:
+                signals = self._results.get("signals", [])
+                if signals:
+                    self._writer.write(signals, "signals")
+                if payloads:
+                    self._writer.write(payloads, "trust_payloads")
+                logger.info("Persisted %d signals and %d payloads", len(signals), len(payloads))
+
             logger.info(
                 "Pipeline complete: %d queries, %d payloads",
                 len(self._queries),

@@ -3,27 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 from schemas.article import ArticleSnapshot
 from schemas.enums import NewsProvider
+from utils.datetime_helpers import parse_datetime
 
 from connectors.newsapi_normalizer import infer_category
 
 
 def normalize_to_snapshot(raw: dict[str, Any]) -> ArticleSnapshot:
     """Convert a normalized RSS entry dict to an ArticleSnapshot."""
-    published_at = raw.get("published_at", "")
-    pub_dt = datetime.now(UTC)
-    if isinstance(published_at, str) and published_at:
-        try:
-            pub_dt = parsedate_to_datetime(published_at)
-        except (ValueError, TypeError):
-            try:
-                pub_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-            except ValueError:
-                pass
+    pub_dt = parse_datetime(raw.get("published_at", ""))
 
     headline = raw.get("headline", "untitled")
     return ArticleSnapshot(

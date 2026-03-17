@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -10,6 +11,9 @@ from features.nlp.credibility import get_credibility_score
 from features.nlp.dedup import compute_novelty, find_duplicates
 from features.nlp.entities import extract_entities
 from features.nlp.sentiment import compute_sentiment
+from utils.datetime_helpers import parse_datetime
+
+logger = logging.getLogger(__name__)
 
 
 def build_news_features(articles: pd.DataFrame) -> pd.DataFrame:
@@ -66,8 +70,8 @@ def build_news_features(articles: pd.DataFrame) -> pd.DataFrame:
     entity_overlap = _compute_entity_overlap(df)
     df["corroboration"] = entity_overlap
 
-    # Contradiction placeholder (requires deeper NLP — default to low)
-    df["contradiction_score"] = 0.2
+    # Contradiction: sentiment divergence within duplicate clusters
+    df["contradiction_score"] = _compute_contradiction(df, clusters)
 
     # Article count for the query window
     df["article_count"] = len(df)
@@ -83,19 +87,42 @@ def _freshness_decay(
     """Compute freshness score using exponential decay."""
     import math
 
-    if isinstance(published_at, str):
-        try:
-            pub = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-        except ValueError:
-            return 0.5
-    else:
-        pub = published_at
-
-    if pub.tzinfo is None:
-        pub = pub.replace(tzinfo=UTC)
+    pub = parse_datetime(published_at)
 
     age_seconds = max(0.0, (now - pub).total_seconds())
     return math.exp(-0.693 * age_seconds / half_life_seconds)
+
+
+def _compute_contradiction(
+    df: pd.DataFrame,
+    clusters: list[set[int]],
+) -> pd.Series:
+    """Compute contradiction score from sentiment divergence within clusters.
+
+    Articles in the same duplicate cluster that have divergent sentiment
+    produce a high contradiction score.  Singletons get a low baseline.
+    """
+    # Build index → cluster mapping
+    idx_to_cluster: dict[int, int] = {}
+    for cluster_id, cluster in enumerate(clusters):
+        if len(cluster) >= 2:
+            for idx in cluster:
+                idx_to_cluster[idx] = cluster_id
+
+    scores = []
+    for i in range(len(df)):
+        cluster_id = idx_to_cluster.get(i)
+        if cluster_id is None:
+            scores.append(0.1)
+            continue
+
+        cluster_indices = sorted(clusters[cluster_id])
+        sentiments = df.iloc[cluster_indices]["sentiment_score"].values
+        stddev = float(sentiments.std(ddof=0))
+        # Scale: stddev of 0.5 on [-1,1] scale → max contradiction
+        scores.append(min(1.0, stddev / 0.5))
+
+    return pd.Series(scores, index=df.index)
 
 
 def _compute_entity_overlap(df: pd.DataFrame) -> pd.Series:
