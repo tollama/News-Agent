@@ -27,5 +27,29 @@ class JsonlReader:
                         records.append(json.loads(line))
         return records
 
+    def read_all(self, dataset: str) -> list[dict[str, Any]]:
+        """Read all records across all partitions for a dataset."""
+        dataset_dir = self._base_dir / dataset
+        records: list[dict[str, Any]] = []
+        if not dataset_dir.exists():
+            return records
+        for partition_dir in sorted(dataset_dir.glob("dt=*")):
+            if not partition_dir.is_dir():
+                continue
+            for f in sorted(partition_dir.glob("*.jsonl")):
+                with f.open() as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if line:
+                            records.append(json.loads(line))
+        return records
+
+    def find_first(self, dataset: str, field: str, value: Any) -> dict[str, Any] | None:
+        """Return the first record whose field equals the requested value."""
+        for record in self.read_all(dataset):
+            if record.get(field) == value:
+                return record
+        return None
+
 
 __all__ = ["JsonlReader"]

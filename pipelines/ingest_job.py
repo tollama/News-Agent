@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -114,6 +115,7 @@ class NewsIngestPipeline:
                 payload = self._agent.to_trust_payload(signal)
                 payloads.append(payload)
             self._results["trust_payloads"] = payloads
+<<<<<<< Updated upstream
 
             # Persist artifacts if a writer is configured
             if self._writer is not None:
@@ -124,6 +126,21 @@ class NewsIngestPipeline:
                     self._writer.write(payloads, "trust_payloads")
                 logger.info("Persisted %d signals and %d payloads", len(signals), len(payloads))
 
+=======
+            writer = JsonlWriter(base_dir=os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw"))
+            if self._results.get("signals"):
+                writer.write(
+                    self._results["signals"],
+                    dataset="signals",
+                    date_str=now.strftime("%Y-%m-%d"),
+                )
+            if payloads:
+                writer.write(
+                    payloads,
+                    dataset="trust_payloads",
+                    date_str=now.strftime("%Y-%m-%d"),
+                )
+>>>>>>> Stashed changes
             logger.info(
                 "Pipeline complete: %d queries, %d payloads",
                 len(self._queries),

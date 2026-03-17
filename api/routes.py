@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+<<<<<<< Updated upstream
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+=======
+import os
+>>>>>>> Stashed changes
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +16,8 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
+from schemas.signals import NewsSignal
+from storage.readers import JsonlReader
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,24 @@ def init_agent(agent: NewsAgent) -> None:
     _agent = agent
 
 
+def _data_dir() -> str:
+    return os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw")
+
+
+def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
+    reader = JsonlReader(base_dir=_data_dir())
+    payload = reader.find_first("trust_payloads", "story_id", story_id)
+    if payload is not None:
+        return payload
+
+    signal_data = reader.find_first("signals", "story_id", story_id)
+    if signal_data is None:
+        return None
+
+    signal = NewsSignal(**signal_data)
+    return get_agent().to_trust_payload(signal)
+
+
 @app.get("/api/v1/news/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "news-agent"}
@@ -99,35 +123,19 @@ async def get_signals(
     }
 
 
-@app.get("/api/v1/news/trust/{story_id}")
+@app.get("/api/v1/news/trust/{story_id:path}")
 async def get_trust(story_id: str) -> dict[str, Any]:
     """Get trust payload for a specific story.
 
     This endpoint is consumed by tollama's HttpNewsConnector
     at GET /stories/{story_id}.
     """
-    agent = get_agent()
-    # For now, return a basic analysis of the story_id
-    result = agent.analyze({"story_id": story_id, "headline": story_id})
-    payload = {
-        "story_id": story_id,
-        "source_credibility": result["component_breakdown"].get(
-            "source_credibility", {}
-        ).get("score", 0.5),
-        "corroboration": result["component_breakdown"].get(
-            "corroboration", {}
-        ).get("score", 0.5),
-        "contradiction_score": result["component_breakdown"].get(
-            "contradiction_penalty", {}
-        ).get("score", 0.2),
-        "propagation_delay_seconds": 300.0,
-        "freshness_score": result["component_breakdown"].get(
-            "freshness", {}
-        ).get("score", 0.5),
-        "novelty": result["component_breakdown"].get(
-            "novelty", {}
-        ).get("score", 0.5),
-    }
+    payload = _lookup_persisted_trust_payload(story_id)
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"story_id {story_id!r} not found in persisted trust artifacts",
+        )
     return payload
 
 
@@ -144,7 +152,7 @@ async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
 
 
 # Compatibility alias for tollama HttpNewsConnector (GET /stories/{id})
-@app.get("/stories/{story_id}")
+@app.get("/stories/{story_id:path}")
 async def stories_compat(story_id: str) -> dict[str, Any]:
     """Compatibility endpoint for tollama's HttpNewsConnector."""
     return await get_trust(story_id)

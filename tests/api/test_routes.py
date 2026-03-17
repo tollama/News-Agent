@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 """Tests for api.routes."""
 
 from __future__ import annotations
@@ -6,10 +7,17 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+=======
+"""API tests for News-Agent routes."""
+
+from __future__ import annotations
+
+>>>>>>> Stashed changes
 from fastapi.testclient import TestClient
 
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
+<<<<<<< Updated upstream
 from schemas.signals import NewsSignal
 
 
@@ -89,3 +97,64 @@ def test_503_when_not_initialized(client):
         assert resp.status_code == 503
     finally:
         routes._agent = old
+=======
+from storage.writers import JsonlWriter
+
+
+def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                "story_id": "story-123",
+                "source_credibility": 0.91,
+                "corroboration": 0.82,
+                "contradiction_score": 0.14,
+                "propagation_delay_seconds": 45.0,
+                "freshness_score": 0.97,
+                "novelty": 0.33,
+            }
+        ],
+        dataset="trust_payloads",
+        date_str="2026-03-17",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/stories/story-123")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["story_id"] == "story-123"
+    assert payload["contradiction_score"] == 0.14
+
+
+def test_stories_route_falls_back_to_persisted_signal(tmp_path, monkeypatch, sample_news_signal_data):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [sample_news_signal_data],
+        dataset="signals",
+        date_str="2026-03-17",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/stories/https://example.com/article/123")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["story_id"] == "https://example.com/article/123"
+    assert payload["contradiction_score"] == sample_news_signal_data["contradiction_score"]
+
+
+def test_stories_route_returns_404_when_story_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+
+    with TestClient(app) as client:
+        response = client.get("/stories/missing-story")
+
+    assert response.status_code == 404
+>>>>>>> Stashed changes
