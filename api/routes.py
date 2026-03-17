@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-<<<<<<< Updated upstream
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-=======
 import os
->>>>>>> Stashed changes
 from datetime import datetime
 from typing import Any
 

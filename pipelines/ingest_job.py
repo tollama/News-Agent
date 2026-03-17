@@ -115,22 +115,15 @@ class NewsIngestPipeline:
                 payload = self._agent.to_trust_payload(signal)
                 payloads.append(payload)
             self._results["trust_payloads"] = payloads
-<<<<<<< Updated upstream
-
-            # Persist artifacts if a writer is configured
-            if self._writer is not None:
-                signals = self._results.get("signals", [])
-                if signals:
-                    self._writer.write(signals, "signals")
-                if payloads:
-                    self._writer.write(payloads, "trust_payloads")
-                logger.info("Persisted %d signals and %d payloads", len(signals), len(payloads))
-
-=======
-            writer = JsonlWriter(base_dir=os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw"))
-            if self._results.get("signals"):
+            writer = self._writer
+            if writer is None:
+                writer = JsonlWriter(
+                    base_dir=os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw"),
+                )
+            signals = self._results.get("signals", [])
+            if signals:
                 writer.write(
-                    self._results["signals"],
+                    signals,
                     dataset="signals",
                     date_str=now.strftime("%Y-%m-%d"),
                 )
@@ -140,7 +133,11 @@ class NewsIngestPipeline:
                     dataset="trust_payloads",
                     date_str=now.strftime("%Y-%m-%d"),
                 )
->>>>>>> Stashed changes
+            logger.info(
+                "Persisted %d signals and %d payloads",
+                len(signals),
+                len(payloads),
+            )
             logger.info(
                 "Pipeline complete: %d queries, %d payloads",
                 len(self._queries),

@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 """Tests for api.routes."""
 
 from __future__ import annotations
@@ -7,18 +6,12 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
-=======
-"""API tests for News-Agent routes."""
-
-from __future__ import annotations
-
->>>>>>> Stashed changes
 from fastapi.testclient import TestClient
 
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
-<<<<<<< Updated upstream
 from schemas.signals import NewsSignal
+from storage.writers import JsonlWriter
 
 
 @pytest.fixture()
@@ -97,10 +90,6 @@ def test_503_when_not_initialized(client):
         assert resp.status_code == 503
     finally:
         routes._agent = old
-=======
-from storage.writers import JsonlWriter
-
-
 def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):
     monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
     init_agent(NewsAgent())
@@ -157,4 +146,3 @@ def test_stories_route_returns_404_when_story_missing(tmp_path, monkeypatch):
         response = client.get("/stories/missing-story")
 
     assert response.status_code == 404
->>>>>>> Stashed changes
