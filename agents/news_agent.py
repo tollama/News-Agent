@@ -1,0 +1,253 @@
+"""NewsAgent — main orchestrating agent for the News Agent service.
+
+Implements the TrustAgent protocol from tollama.xai.trust_contract
+so it can be registered in the trust pipeline.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pandas as pd
+
+from calibration.news_trust_score import compute_news_trust
+from connectors.base import NewsDataConnector
+from connectors.newsapi_normalizer import normalize_to_snapshot
+from features.build_features import build_news_features
+from schemas.signals import NewsSignal
+
+
+class NewsAgent:
+    """Orchestrates news ingestion, feature extraction, and trust scoring.
+
+    Satisfies the TrustAgent protocol:
+        agent_name: str
+        domain: str
+        priority: int
+        supports(context) -> bool
+        analyze(payload) -> NormalizedTrustResult | dict
+    """
+
+    agent_name = "news_agent"
+    domain = "news"
+    priority = 50
+
+    def __init__(
+        self,
+        connectors: list[NewsDataConnector] | None = None,
+    ) -> None:
+        self._connectors = connectors or []
+
+    def supports(self, context: dict[str, Any]) -> bool:
+        """Return True if this agent can handle the given context."""
+        domain = context.get("domain", "")
+        return domain == "news" or "news" in domain
+
+    def analyze(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Analyze a pre-computed news signal or raw payload.
+
+        Accepts either a NewsSignal-compatible dict or raw query parameters.
+        Returns a NormalizedTrustResult-compatible dict.
+        """
+        # If payload already has trust-relevant fields, wrap as signal
+        if "story_id" in payload and "source_credibility" in payload:
+            signal = NewsSignal(**payload)
+        else:
+            # Build a minimal signal from payload
+            signal = NewsSignal(
+                story_id=payload.get("story_id", payload.get("headline", "unknown")),
+                headline=payload.get("headline", "unknown"),
+                source_name=payload.get("source_name", "unknown"),
+                published_at=payload.get("published_at", datetime.now(UTC)),
+                analyzed_at=datetime.now(UTC),
+                sentiment_score=payload.get("sentiment_score", 0.0),
+                entities=payload.get("entities", []),
+                source_credibility=payload.get("source_credibility", 0.5),
+                corroboration=payload.get("corroboration", 0.5),
+                contradiction_score=payload.get("contradiction_score", 0.2),
+                propagation_delay_seconds=payload.get("propagation_delay_seconds", 300.0),
+                freshness_score=payload.get("freshness_score", 0.5),
+                novelty=payload.get("novelty", 0.5),
+                article_count=payload.get("article_count", 1),
+                query=payload.get("query", ""),
+            )
+
+        trust_result = compute_news_trust(signal)
+        return self._to_normalized_result(signal, trust_result)
+
+    async def process_query(
+        self,
+        query: str,
+        *,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
+        limit: int = 100,
+    ) -> NewsSignal:
+        """Fetch articles, compute features, and produce a NewsSignal."""
+        # Collect articles from all connectors
+        all_raw: list[dict[str, Any]] = []
+        for connector in self._connectors:
+            articles = await connector.fetch_articles(
+                query=query,
+                from_date=from_date,
+                to_date=to_date,
+                limit=limit,
+            )
+            all_raw.extend(articles)
+
+        if not all_raw:
+            return self._empty_signal(query)
+
+        # Normalize to snapshots
+        snapshots = [normalize_to_snapshot(a) for a in all_raw]
+        df = pd.DataFrame([s.model_dump() for s in snapshots])
+
+        # Build features
+        featured = build_news_features(df)
+
+        # Aggregate into a single signal
+        return self._aggregate_to_signal(featured, query)
+
+    def to_trust_payload(self, signal: NewsSignal) -> dict[str, Any]:
+        """Convert a NewsSignal to a NewsTrustPayload-compatible dict.
+
+        Output is directly consumable by tollama's NewsTrustPayload model.
+        """
+        return {
+            "story_id": signal.story_id,
+            "source_credibility": signal.source_credibility,
+            "corroboration": signal.corroboration,
+            "contradiction_score": signal.contradiction_score,
+            "propagation_delay_seconds": signal.propagation_delay_seconds,
+            "freshness_score": signal.freshness_score,
+            "novelty": signal.novelty,
+        }
+
+    @staticmethod
+    def _derive_calibration_status(score: float) -> str:
+        """Derive calibration status from trust score."""
+        if score >= 0.75:
+            return "well_calibrated"
+        if score >= 0.50:
+            return "moderately_calibrated"
+        return "poorly_calibrated"
+
+    @staticmethod
+    def _detect_violations(
+        trust_score: float,
+        signal: NewsSignal,
+    ) -> list[dict[str, str]]:
+        """Detect trust violations from signal data."""
+        violations: list[dict[str, str]] = []
+        if trust_score < 0.3:
+            violations.append({"name": "low_trust", "severity": "critical"})
+        if signal.freshness_score < 0.3:
+            violations.append({"name": "stale_data", "severity": "warning"})
+        if signal.contradiction_score > 0.8:
+            violations.append({"name": "high_contradiction", "severity": "warning"})
+        if signal.source_credibility < 0.3:
+            violations.append({"name": "low_source_credibility", "severity": "warning"})
+        return violations
+
+    def _to_normalized_result(
+        self,
+        signal: NewsSignal,
+        trust_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build a NormalizedTrustResult-compatible dict."""
+        components = trust_result["components"]
+        weights = trust_result["weights"]
+        trust_score = trust_result["trust_score"]
+        return {
+            "agent_name": self.agent_name,
+            "domain": self.domain,
+            "trust_score": trust_score,
+            "risk_category": trust_result["risk_category"],
+            "calibration_status": self._derive_calibration_status(trust_score),
+            "component_breakdown": {
+                name: {"score": score, "weight": weights.get(name, 0.0)}
+                for name, score in components.items()
+            },
+            "violations": self._detect_violations(trust_score, signal),
+            "why_trusted": (
+                f"News trust score {trust_score:.2f} based on "
+                f"{signal.article_count} articles from '{signal.source_name}'"
+            ),
+            "evidence": {
+                "source_type": "news_feed",
+                "source_ids": [signal.story_id],
+                "freshness_seconds": signal.propagation_delay_seconds,
+            },
+            "audit": {
+                "formula_version": "v1",
+                "generated_at": datetime.now(UTC).isoformat(),
+                "agent_version": "0.1.0",
+            },
+        }
+
+    def _aggregate_to_signal(
+        self,
+        df: pd.DataFrame,
+        query: str,
+    ) -> NewsSignal:
+        """Aggregate featured DataFrame into a single NewsSignal."""
+        now = datetime.now(UTC)
+        # Use the top-credibility article as representative
+        best_idx = df["source_credibility"].idxmax()
+        best = df.iloc[best_idx]
+
+        # Aggregate entities across all articles
+        all_entities: list[str] = []
+        for ents in df["entities"]:
+            if isinstance(ents, list):
+                all_entities.extend(ents)
+        unique_entities = sorted(set(all_entities))
+
+        # Unique sources for corroboration
+        unique_sources = df["source_name"].nunique()
+        total = len(df)
+
+        from calibration.corroboration import corroboration_score
+
+        return NewsSignal(
+            story_id=str(best.get("article_id", query)),
+            headline=str(best.get("headline", query)),
+            source_name=str(best.get("source_name", "unknown")),
+            published_at=best.get("published_at", now),
+            analyzed_at=now,
+            sentiment_score=float(df["sentiment_score"].mean()),
+            entities=unique_entities[:50],
+            source_credibility=float(df["source_credibility"].max()),
+            corroboration=corroboration_score(total, unique_sources),
+            contradiction_score=float(df["contradiction_score"].mean()),
+            propagation_delay_seconds=float(df["propagation_delay_seconds"].mean()),
+            freshness_score=float(df["freshness_score"].max()),
+            novelty=float(df["novelty"].mean()),
+            article_count=total,
+            query=query,
+        )
+
+    def _empty_signal(self, query: str) -> NewsSignal:
+        """Return a low-confidence signal when no articles are found."""
+        now = datetime.now(UTC)
+        return NewsSignal(
+            story_id=f"empty:{query}",
+            headline=query,
+            source_name="none",
+            published_at=now,
+            analyzed_at=now,
+            sentiment_score=0.0,
+            entities=[],
+            source_credibility=0.0,
+            corroboration=0.0,
+            contradiction_score=0.0,
+            propagation_delay_seconds=0.0,
+            freshness_score=0.0,
+            novelty=1.0,
+            article_count=0,
+            query=query,
+        )
+
+
+__all__ = ["NewsAgent"]

@@ -1,0 +1,50 @@
+app:
+  name: "news-agent"
+  environment: "development"
+  timezone: "UTC"
+
+data:
+  raw_dir: "data/raw"
+  derived_dir: "data/derived"
+  cache_dir: "data/cache"
+
+providers:
+  newsapi:
+    enabled: true
+    base_url: "https://newsapi.org/v2"
+    api_key_env: "NEWSAPI_API_KEY"
+    timeout: 10.0
+    rate_limit_per_day: 100
+  gdelt:
+    enabled: false
+    base_url: "https://api.gdeltproject.org/api/v2"
+    timeout: 15.0
+  rss:
+    enabled: false
+    feed_urls:
+      - "https://feeds.reuters.com/reuters/topNews"
+      - "https://feeds.bbci.co.uk/news/rss.xml"
+    timeout: 10.0
+
+nlp:
+  sentiment_model: "vader"
+  dedup_threshold: 0.5
+  dedup_num_perm: 128
+
+trust:
+  weights:
+    source_credibility: 0.30
+    corroboration: 0.25
+    freshness: 0.20
+    novelty: 0.15
+    contradiction_penalty: 0.10
+  freshness_half_life_hours: 6.0
+
+pipeline:
+  batch_interval_minutes: 15
+  polling_interval_seconds: 60
+  max_articles_per_query: 100
+
+api:
+  host: "0.0.0.0"
+  port: 8090
