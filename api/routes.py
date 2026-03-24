@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
 from services.persisted_story_clusters import PersistedStoryClusterService
-from storage.persisted_signals import PersistedSignalStore
+from storage.persisted_signals import PersistedSignalStore, decode_persisted_signal_cursor
 from storage.persisted_stories import PersistedStoryStore
 from storage.readers import JsonlReader
 
@@ -170,13 +170,15 @@ def _build_recent_signals(
     story_id: str | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
-) -> list[dict[str, Any]]:
-    return _signal_store().list_recent(
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return _signal_store().list_recent_page(
         limit=limit,
         query=query,
         story_id=story_id,
         from_date=from_date,
         to_date=to_date,
+        cursor=cursor,
     )
 
 
@@ -234,23 +236,30 @@ async def get_signals(
     limit: int = Query(100, ge=1, le=500),
     persisted: bool = Query(False),
     story_id: str | None = Query(None, min_length=1, max_length=1000),
+    cursor: str | None = Query(None, min_length=1, max_length=1000),
 ) -> dict[str, Any]:
     """Fetch live news signals or retrieve persisted signal artifacts."""
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=400, detail="from_date must be <= to_date")
 
     if persisted:
-        logger.info("GET /signals persisted=true query=%r story_id=%r limit=%d", query, story_id, limit)
-        signals = _build_recent_signals(
+        if cursor is not None:
+            try:
+                decode_persisted_signal_cursor(cursor)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="cursor must be a valid persisted signals cursor") from exc
+
+        logger.info("GET /signals persisted=true query=%r story_id=%r limit=%d cursor=%r", query, story_id, limit, cursor)
+        page = _build_recent_signals(
             limit=limit,
             query=query,
             story_id=story_id,
             from_date=from_date,
             to_date=to_date,
+            cursor=cursor,
         )
         return {
-            "signals": signals,
-            "count": len(signals),
+            **page,
             "source": "persisted",
         }
 

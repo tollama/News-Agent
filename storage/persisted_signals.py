@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -59,7 +61,27 @@ class PersistedSignalStore:
         to_date: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """List recent persisted signals with pragmatic product-facing filters."""
-        signals = self._reader.list_recent(self._DATASET, limit=max(limit * 8, 50))
+        return self.list_recent_page(
+            limit=limit,
+            query=query,
+            story_id=story_id,
+            from_date=from_date,
+            to_date=to_date,
+        )["signals"]
+
+    def list_recent_page(
+        self,
+        *,
+        limit: int = 20,
+        query: str | None = None,
+        story_id: str | None = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """List a cursor-paged slice of persisted signals."""
+        offset = decode_persisted_signal_cursor(cursor)
+        signals = self._reader.list_recent(self._DATASET, limit=max((offset + limit) * 8, 50))
         if story_id:
             signals = [signal for signal in signals if signal.get("story_id") == story_id]
         if query:
@@ -70,7 +92,17 @@ class PersistedSignalStore:
                 for signal in signals
                 if signal_matches_dates(signal, from_date=from_date, to_date=to_date)
             ]
-        return signals[:limit]
+
+        page = signals[offset : offset + limit + 1]
+        items = page[:limit]
+        has_more = len(page) > limit
+        next_cursor = encode_persisted_signal_cursor(offset + limit) if has_more else None
+        return {
+            "signals": items,
+            "count": len(items),
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        }
 
     def find_story(self, story_id: str) -> dict[str, Any] | None:
         """Resolve the first persisted signal for a story id."""
@@ -118,6 +150,28 @@ def signal_matches_dates(
     return True
 
 
+def encode_persisted_signal_cursor(offset: int) -> str:
+    """Encode a persisted signal pagination cursor."""
+    payload = json.dumps({"offset": max(0, int(offset))}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_persisted_signal_cursor(cursor: str | None) -> int:
+    """Decode a persisted signal pagination cursor into a numeric offset."""
+    if not cursor:
+        return 0
+    padded = cursor + "=" * (-len(cursor) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    except Exception as exc:  # pragma: no cover - normalized below
+        raise ValueError("Invalid cursor") from exc
+
+    offset = payload.get("offset")
+    if not isinstance(offset, int) or offset < 0:
+        raise ValueError("Invalid cursor")
+    return offset
+
+
 def _parse_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -129,4 +183,10 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
-__all__ = ["PersistedSignalStore", "signal_matches_dates", "signal_matches_query"]
+__all__ = [
+    "PersistedSignalStore",
+    "decode_persisted_signal_cursor",
+    "encode_persisted_signal_cursor",
+    "signal_matches_dates",
+    "signal_matches_query",
+]
