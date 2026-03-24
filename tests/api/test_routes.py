@@ -405,9 +405,10 @@ def test_stories_route_uses_persisted_story_store_for_lookup(monkeypatch):
     init_agent(NewsAgent())
     called: dict[str, object] = {}
 
-    def fake_find_story_payload(self, story_id: str, *, to_trust_payload=None):
+    def fake_find_story_payload(self, story_id: str, *, to_trust_payload=None, persist_generated=True):
         called["story_id"] = story_id
         called["to_trust_payload"] = callable(to_trust_payload)
+        called["persist_generated"] = persist_generated
         return {
             "story_id": story_id,
             "source_credibility": 0.91,
@@ -425,7 +426,7 @@ def test_stories_route_uses_persisted_story_store_for_lookup(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["story_id"] == "story-123"
-    assert called == {"story_id": "story-123", "to_trust_payload": True}
+    assert called == {"story_id": "story-123", "to_trust_payload": True, "persist_generated": True}
 
 
 def test_stories_route_falls_back_to_persisted_signal_without_inverting_contradiction_score(

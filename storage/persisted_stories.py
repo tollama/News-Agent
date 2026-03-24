@@ -19,6 +19,9 @@ class PersistedStoryStore:
     rebuilding ad hoc responses directly inside route handlers.
     """
 
+    _TRUST_PAYLOAD_DATASET = "trust_payloads"
+    _STORY_SUMMARY_DATASET = "story_summaries"
+
     def __init__(
         self,
         *,
@@ -30,18 +33,34 @@ class PersistedStoryStore:
 
     def write(self, stories: list[dict[str, Any]], *, date_str: str | None = None) -> Any:
         """Persist explicit story summary artifacts when callers have them."""
-        return self._writer.write(stories, dataset="story_summaries", date_str=date_str)
+        return self._writer.write(stories, dataset=self._STORY_SUMMARY_DATASET, date_str=date_str)
 
     def write_by_partition(self, stories: list[dict[str, Any]]) -> list[Any]:
         """Persist story summaries grouped by their analyzed/published date."""
-        writes: list[Any] = []
-        for partition_date, partition_stories in _group_records_by_partition_date(stories).items():
-            writes.append(self.write(partition_stories, date_str=partition_date))
-        return writes
+        return self._write_records_by_partition(stories, dataset=self._STORY_SUMMARY_DATASET)
+
+    def write_trust_payloads(self, payloads: list[dict[str, Any]], *, date_str: str | None = None) -> Any:
+        """Persist normalized trust payload artifacts when callers have them."""
+        return self._writer.write(payloads, dataset=self._TRUST_PAYLOAD_DATASET, date_str=date_str)
+
+    def write_trust_payloads_by_partition(self, payloads: list[dict[str, Any]]) -> list[Any]:
+        """Persist trust payloads grouped by their analyzed/published date."""
+        return self._write_records_by_partition(payloads, dataset=self._TRUST_PAYLOAD_DATASET)
 
     def read(self, date_str: str) -> list[dict[str, Any]]:
         """Read persisted story summary artifacts for a partition."""
-        return self._reader.read("story_summaries", date_str)
+        return self._reader.read(self._STORY_SUMMARY_DATASET, date_str)
+
+    def _write_records_by_partition(
+        self,
+        records: list[Mapping[str, Any]],
+        *,
+        dataset: str,
+    ) -> list[Any]:
+        writes: list[Any] = []
+        for partition_date, partition_records in _group_records_by_partition_date(records).items():
+            writes.append(self._writer.write(partition_records, dataset=dataset, date_str=partition_date))
+        return writes
 
     def list_recent(
         self,
@@ -78,13 +97,14 @@ class PersistedStoryStore:
         story_id: str,
         *,
         to_trust_payload: Callable[[NewsSignal], Mapping[str, Any]] | None = None,
+        persist_generated: bool = True,
     ) -> dict[str, Any] | None:
         """Resolve a story payload from persisted trust artifacts or fallback signals."""
-        payload = self._reader.find_first("trust_payloads", "story_id", story_id)
+        payload = self._reader.find_first(self._TRUST_PAYLOAD_DATASET, "story_id", story_id)
         if payload is not None:
             return payload
 
-        payload = self._reader.find_first("story_summaries", "story_id", story_id)
+        payload = self._reader.find_first(self._STORY_SUMMARY_DATASET, "story_id", story_id)
         if payload is not None:
             return payload
 
@@ -93,7 +113,10 @@ class PersistedStoryStore:
             return None
 
         signal = NewsSignal(**signal_data)
-        return dict(to_trust_payload(signal))
+        generated_payload = dict(to_trust_payload(signal))
+        if persist_generated and generated_payload:
+            self.write_trust_payloads_by_partition([generated_payload])
+        return generated_payload
 
 
 def build_story_summary(signal: NewsSignal, trust: Mapping[str, Any] | None = None) -> dict[str, Any]:

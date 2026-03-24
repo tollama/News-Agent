@@ -131,12 +131,48 @@ def test_persisted_story_store_finds_story_payload_via_signal_fallback(tmp_path)
             "propagation_delay_seconds": signal.propagation_delay_seconds,
             "freshness_score": signal.freshness_score,
             "novelty": signal.novelty,
+            "published_at": signal.published_at.isoformat(),
+            "analyzed_at": signal.analyzed_at.isoformat(),
         },
     )
 
     assert payload is not None
     assert payload["story_id"] == "story-1"
     assert payload["contradiction_score"] == 0.1
+
+    persisted = JsonlReader(base_dir=str(tmp_path)).find_first("trust_payloads", "story_id", "story-1")
+    assert persisted is not None
+    assert persisted["contradiction_score"] == 0.1
+
+
+def test_persisted_story_store_can_skip_persisting_generated_trust_payload(tmp_path):
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [_make_signal("story-1").model_dump(mode="json")],
+        dataset="signals",
+        date_str="2026-03-24",
+    )
+    store = PersistedStoryStore(reader=JsonlReader(base_dir=str(tmp_path)))
+
+    payload = store.find_story_payload(
+        "story-1",
+        to_trust_payload=lambda signal: {
+            "story_id": signal.story_id,
+            "source_credibility": signal.source_credibility,
+            "corroboration": signal.corroboration,
+            "contradiction_score": signal.contradiction_score,
+            "propagation_delay_seconds": signal.propagation_delay_seconds,
+            "freshness_score": signal.freshness_score,
+            "novelty": signal.novelty,
+            "published_at": signal.published_at.isoformat(),
+            "analyzed_at": signal.analyzed_at.isoformat(),
+        },
+        persist_generated=False,
+    )
+
+    assert payload is not None
+    persisted = JsonlReader(base_dir=str(tmp_path)).find_first("trust_payloads", "story_id", "story-1")
+    assert persisted is None
 
 
 def test_story_matches_query_checks_summary_fields():
