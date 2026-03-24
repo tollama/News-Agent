@@ -177,6 +177,82 @@ def test_recent_stories_route_reads_persisted_signals(tmp_path, monkeypatch):
     assert payload["stories"][0]["trust_score"] >= 0.0
 
 
+def test_recent_clusters_route_summarizes_related_persisted_signals(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                **_make_signal("fed-1", query="fed rates").model_dump(mode="json"),
+                "headline": "Federal Reserve holds rates as Powell signals patience",
+                "entities": ["Federal Reserve", "Jerome Powell", "US"],
+                "article_count": 4,
+            },
+            {
+                **_make_signal("fed-2", query="fed rates").model_dump(mode="json"),
+                "headline": "Powell says Federal Reserve will wait before rate cuts",
+                "entities": ["Federal Reserve", "Jerome Powell", "Rates"],
+                "article_count": 3,
+                "source_name": "AP",
+            },
+            {
+                **_make_signal("ai-1", query="ai chips").model_dump(mode="json"),
+                "headline": "Nvidia unveils next AI chip roadmap",
+                "entities": ["Nvidia", "AI", "Chips"],
+                "article_count": 2,
+            },
+        ],
+        dataset="signals",
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/clusters/recent", params={"limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    first_cluster = payload["clusters"][0]
+    assert first_cluster["story_count"] == 2
+    assert first_cluster["total_article_count"] == 7
+    assert set(first_cluster["story_ids"]) == {"fed-1", "fed-2"}
+    assert "Federal Reserve" in first_cluster["top_entities"]
+    assert set(first_cluster["source_names"]) == {"AP", "Reuters"}
+    assert first_cluster["avg_trust_score"] >= 0.0
+
+
+def test_recent_clusters_route_filters_by_query(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                **_make_signal("fed-1", query="fed rates").model_dump(mode="json"),
+                "headline": "Federal Reserve holds rates steady",
+                "entities": ["Federal Reserve", "Rates"],
+            },
+            {
+                **_make_signal("ai-1", query="ai chips").model_dump(mode="json"),
+                "headline": "Nvidia unveils AI chip roadmap",
+                "entities": ["Nvidia", "AI"],
+            },
+        ],
+        dataset="signals",
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/clusters/recent", params={"query": "fed"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["clusters"][0]["query"] == "fed rates"
+    assert payload["clusters"][0]["story_ids"] == ["fed-1"]
+
+
 def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):
     monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
     init_agent(NewsAgent())

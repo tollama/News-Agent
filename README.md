@@ -6,7 +6,7 @@ The current implementation already includes:
 
 - async connectors for `NewsAPI`, `GDELT`, and `RSS`
 - a `NewsAgent` orchestrator for fetch -> feature build -> trust scoring
-- a FastAPI surface for health, readiness, signal generation, trust payload access, and recent persisted story summaries
+- a FastAPI surface for health, readiness, signal generation, trust payload access, recent persisted story summaries, and recent cluster summaries
 - optional API-key protection for non-health endpoints via `NEWS_AGENT_API_KEY` or `API_KEY`
 - lightweight persisted `story_id` lookup indexing for faster trust artifact reads
 - JSONL persistence with a SQLite sidecar index for practical artifact lookup without changing the append-log format
@@ -64,6 +64,7 @@ Defined in [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/New
 - `GET /api/v1/news/ready`
 - `GET /api/v1/news/signals`
 - `GET /api/v1/news/stories/recent`
+- `GET /api/v1/news/clusters/recent`
 - `GET /api/v1/news/trust/{story_id}`
 - `POST /api/v1/news/analyze`
 - `GET /stories/{story_id}` for compatibility
