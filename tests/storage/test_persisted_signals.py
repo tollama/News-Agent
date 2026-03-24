@@ -57,6 +57,25 @@ def test_persisted_signal_store_lists_recent_with_query_filter(tmp_path):
     assert [signal["story_id"] for signal in recent] == ["story-fed"]
 
 
+def test_persisted_signal_store_lists_recent_with_story_id_and_date_filters(tmp_path):
+    store = PersistedSignalStore(reader=JsonlReader(base_dir=str(tmp_path)))
+    store.write_by_partition(
+        [
+            _make_signal("story-fed", analyzed_at=datetime(2026, 3, 24, 12, 0, tzinfo=UTC)),
+            _make_signal("story-ai", query="ai chips", analyzed_at=datetime(2026, 3, 25, 12, 0, tzinfo=UTC)),
+        ]
+    )
+
+    recent = store.list_recent(
+        limit=5,
+        story_id="story-fed",
+        from_date=datetime(2026, 3, 24, 0, 0, tzinfo=UTC),
+        to_date=datetime(2026, 3, 24, 23, 59, tzinfo=UTC),
+    )
+
+    assert [signal["story_id"] for signal in recent] == ["story-fed"]
+
+
 def test_persisted_signal_store_writes_by_partition_from_signal_timestamps(tmp_path):
     store = PersistedSignalStore(reader=JsonlReader(base_dir=str(tmp_path)))
     store.write_by_partition(

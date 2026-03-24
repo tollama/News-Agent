@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 from schemas.signals import NewsSignal
@@ -53,11 +54,22 @@ class PersistedSignalStore:
         *,
         limit: int = 20,
         query: str | None = None,
+        story_id: str | None = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        """List recent persisted signals with optional free-text matching."""
-        signals = self._reader.list_recent(self._DATASET, limit=max(limit * 4, 20))
+        """List recent persisted signals with pragmatic product-facing filters."""
+        signals = self._reader.list_recent(self._DATASET, limit=max(limit * 8, 50))
+        if story_id:
+            signals = [signal for signal in signals if signal.get("story_id") == story_id]
         if query:
             signals = [signal for signal in signals if signal_matches_query(signal, query)]
+        if from_date or to_date:
+            signals = [
+                signal
+                for signal in signals
+                if signal_matches_dates(signal, from_date=from_date, to_date=to_date)
+            ]
         return signals[:limit]
 
     def find_story(self, story_id: str) -> dict[str, Any] | None:
@@ -83,9 +95,38 @@ def signal_matches_query(signal: Mapping[str, Any], query: str | None) -> bool:
         signal.get("query", ""),
         signal.get("headline", ""),
         signal.get("story_id", ""),
+        signal.get("source_name", ""),
         *(signal.get("entities", []) or []),
     ]
     return any(needle in str(value).lower() for value in haystacks)
 
 
-__all__ = ["PersistedSignalStore", "signal_matches_query"]
+def signal_matches_dates(
+    signal: Mapping[str, Any],
+    *,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+) -> bool:
+    """Return whether a persisted signal falls inside an optional time window."""
+    candidate = _parse_datetime(signal.get("analyzed_at")) or _parse_datetime(signal.get("published_at"))
+    if candidate is None:
+        return False
+    if from_date and candidate < from_date:
+        return False
+    if to_date and candidate > to_date:
+        return False
+    return True
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+__all__ = ["PersistedSignalStore", "signal_matches_dates", "signal_matches_query"]

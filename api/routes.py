@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
 from services.persisted_story_clusters import PersistedStoryClusterService
+from storage.persisted_signals import PersistedSignalStore
 from storage.persisted_stories import PersistedStoryStore
 from storage.readers import JsonlReader
 
@@ -134,6 +135,10 @@ def _story_store() -> PersistedStoryStore:
     return PersistedStoryStore(reader=_reader())
 
 
+def _signal_store() -> PersistedSignalStore:
+    return PersistedSignalStore(reader=_reader())
+
+
 def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
     return _story_store().find_story_payload(
         story_id,
@@ -155,6 +160,23 @@ def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> lis
         query=query,
         analyze_signal=lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
         cluster_id_prefix="recent-cluster",
+    )
+
+
+def _build_recent_signals(
+    *,
+    limit: int,
+    query: str | None = None,
+    story_id: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return _signal_store().list_recent(
+        limit=limit,
+        query=query,
+        story_id=story_id,
+        from_date=from_date,
+        to_date=to_date,
     )
 
 
@@ -206,14 +228,35 @@ async def readiness() -> dict[str, Any]:
 
 @app.get("/api/v1/news/signals", dependencies=[Depends(require_api_key)])
 async def get_signals(
-    query: str = Query(..., min_length=1, max_length=500),
+    query: str | None = Query(None, min_length=1, max_length=500),
     from_date: datetime | None = Query(None, alias="from"),
     to_date: datetime | None = Query(None, alias="to"),
     limit: int = Query(100, ge=1, le=500),
+    persisted: bool = Query(False),
+    story_id: str | None = Query(None, min_length=1, max_length=1000),
 ) -> dict[str, Any]:
-    """Fetch and analyze news for the given query."""
+    """Fetch live news signals or retrieve persisted signal artifacts."""
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=400, detail="from_date must be <= to_date")
+
+    if persisted:
+        logger.info("GET /signals persisted=true query=%r story_id=%r limit=%d", query, story_id, limit)
+        signals = _build_recent_signals(
+            limit=limit,
+            query=query,
+            story_id=story_id,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        return {
+            "signals": signals,
+            "count": len(signals),
+            "source": "persisted",
+        }
+
+    if not query:
+        raise HTTPException(status_code=422, detail="query is required unless persisted=true")
+
     logger.info("GET /signals query='%s' limit=%d", query, limit)
     agent = get_agent()
     signal = await agent.process_query(
@@ -226,6 +269,7 @@ async def get_signals(
     return {
         "signal": signal.model_dump(mode="json"),
         "trust": trust_result,
+        "source": "live",
     }
 
 

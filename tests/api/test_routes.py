@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
 from services.persisted_story_clusters import PersistedStoryClusterService
+from storage.persisted_signals import PersistedSignalStore
 from storage.persisted_stories import PersistedStoryStore
 from storage.readers import JsonlReader
 from storage.story_clusters import StoryClusterStore
@@ -74,6 +75,7 @@ def test_signals(client):
     data = resp.json()
     assert "signal" in data
     assert "trust" in data
+    assert data["source"] == "live"
 
 
 def test_signals_invalid_dates(client):
@@ -87,6 +89,13 @@ def test_signals_invalid_dates(client):
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["message"] == "from_date must be <= to_date"
+
+
+def test_signals_requires_query_for_live_mode(client):
+    resp = client.get("/api/v1/news/signals")
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["message"] == "query is required unless persisted=true"
 
 
 def test_analyze(client):
@@ -159,6 +168,94 @@ def test_validation_errors_return_json_envelope(client):
     body = response.json()
     assert body["error"]["code"] == "validation_error"
     assert body["error"]["details"]
+
+
+def test_signals_route_reads_persisted_signal_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                **_make_signal("story-1", query="fed rates").model_dump(mode="json"),
+                "headline": "Federal Reserve holds rates steady",
+                "entities": ["Federal Reserve", "Rates"],
+            },
+            {
+                **_make_signal("story-2", query="ai chips").model_dump(mode="json"),
+                "headline": "Nvidia unveils AI chip roadmap",
+                "entities": ["Nvidia", "AI"],
+                "source_name": "Bloomberg",
+            },
+        ],
+        dataset="signals",
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/news/signals",
+            params={
+                "persisted": True,
+                "query": "fed",
+                "story_id": "story-1",
+                "limit": 5,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "persisted"
+    assert payload["count"] == 1
+    assert payload["signals"][0]["story_id"] == "story-1"
+    assert payload["signals"][0]["headline"] == "Federal Reserve holds rates steady"
+
+
+def test_signals_route_uses_persisted_signal_store_for_product_reads(monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", "/tmp/news-agent-test")
+    init_agent(NewsAgent())
+    called: dict[str, object] = {}
+
+    def fake_list_recent(self, *, limit=20, query=None, story_id=None, from_date=None, to_date=None):
+        called["limit"] = limit
+        called["query"] = query
+        called["story_id"] = story_id
+        called["from_date"] = from_date.isoformat() if from_date else None
+        called["to_date"] = to_date.isoformat() if to_date else None
+        return [
+            {
+                "story_id": "story-1",
+                "headline": "Federal Reserve holds rates steady",
+                "query": "fed rates",
+            }
+        ]
+
+    monkeypatch.setattr(PersistedSignalStore, "list_recent", fake_list_recent)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/news/signals",
+            params={
+                "persisted": True,
+                "query": "powell",
+                "story_id": "story-1",
+                "from": "2026-03-24T00:00:00+00:00",
+                "to": "2026-03-25T00:00:00+00:00",
+                "limit": 3,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["signals"][0]["story_id"] == "story-1"
+    assert called == {
+        "limit": 3,
+        "query": "powell",
+        "story_id": "story-1",
+        "from_date": "2026-03-24T00:00:00+00:00",
+        "to_date": "2026-03-25T00:00:00+00:00",
+    }
 
 
 def test_recent_stories_route_reads_persisted_signals(tmp_path, monkeypatch):
