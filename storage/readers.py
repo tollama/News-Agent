@@ -21,6 +21,10 @@ class JsonlReader:
         self._index_cache: dict[tuple[str, str], dict[str, Path]] = {}
         self._sqlite_index = SQLiteArtifactIndex(base_dir=base_dir)
 
+    @property
+    def base_dir(self) -> Path:
+        return self._base_dir
+
     def read(self, dataset: str, date_str: str) -> list[dict[str, Any]]:
         """Read all records from a JSONL partition."""
         partition_dir = self._base_dir / dataset / f"dt={date_str}"

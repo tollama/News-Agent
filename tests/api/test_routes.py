@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
+from storage.story_clusters import StoryClusterStore
 from schemas.signals import NewsSignal
 from storage.writers import JsonlWriter
 
@@ -214,6 +215,45 @@ def test_recent_clusters_route_prefers_persisted_cluster_artifacts(tmp_path, mon
     assert first_cluster["cluster_id"] == "persisted-1"
     assert first_cluster["story_ids"] == ["fed-1", "fed-2"]
     assert first_cluster["avg_trust_score"] == 0.81
+
+
+def test_recent_clusters_route_uses_story_cluster_store_for_persisted_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    called: dict[str, object] = {}
+
+    def fake_list_recent(self, *, limit: int = 20, query: str | None = None):
+        called["limit"] = limit
+        called["query"] = query
+        return [
+            {
+                "cluster_id": "persisted-1",
+                "headline": "Federal Reserve holds rates as Powell signals patience",
+                "query": "fed rates",
+                "story_ids": ["fed-1", "fed-2"],
+                "story_count": 2,
+                "total_article_count": 7,
+                "source_names": ["AP", "Reuters"],
+                "top_entities": ["Federal Reserve", "Jerome Powell"],
+                "latest_published_at": "2026-03-24T12:00:00+00:00",
+                "latest_analyzed_at": "2026-03-24T12:05:00+00:00",
+                "avg_trust_score": 0.81,
+                "max_trust_score": 0.88,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            }
+        ]
+
+    monkeypatch.setattr(StoryClusterStore, "list_recent", fake_list_recent)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/clusters/recent", params={"limit": 3, "query": "powell"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["clusters"][0]["cluster_id"] == "persisted-1"
+    assert called == {"limit": 3, "query": "powell"}
 
 
 def test_recent_clusters_route_summarizes_related_persisted_signals(tmp_path, monkeypatch):

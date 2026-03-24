@@ -10,6 +10,7 @@ from typing import Any, Literal
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
 from services.story_clusters import build_signal_cluster_summaries
+from storage.story_clusters import StoryClusterStore
 from storage.writers import JsonlWriter
 
 logger = logging.getLogger(__name__)
@@ -137,9 +138,8 @@ class NewsIngestPipeline:
                     date_str=now.strftime("%Y-%m-%d"),
                 )
             if cluster_summaries:
-                writer.write(
+                StoryClusterStore(writer=writer).write(
                     cluster_summaries,
-                    dataset="story_clusters",
                     date_str=now.strftime("%Y-%m-%d"),
                 )
             logger.info(
