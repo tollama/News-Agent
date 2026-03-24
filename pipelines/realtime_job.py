@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 from agents.news_agent import NewsAgent
 
@@ -25,6 +26,7 @@ class RealtimeNewsPipeline:
         queries: list[str],
         poll_interval_seconds: float = 60.0,
         on_signal: Callable[[dict[str, Any]], None] | None = None,
+        dedup_cache_size: int = 512,
     ) -> None:
         self._agent = agent
         self._queries = queries
@@ -32,6 +34,8 @@ class RealtimeNewsPipeline:
         self._on_signal = on_signal
         self._running = False
         self._last_check: datetime | None = None
+        self._seen_story_ids: dict[str, datetime] = {}
+        self._dedup_cache_size = max(1, dedup_cache_size)
 
     async def run(self, max_iterations: int | None = None) -> None:
         """Start the polling loop."""
@@ -52,7 +56,9 @@ class RealtimeNewsPipeline:
                         from_date=since,
                         limit=50,
                     )
-                    if signal.article_count > 0 and self._on_signal:
+                    if signal.article_count <= 0 or self._on_signal is None:
+                        continue
+                    if self._should_emit(signal.story_id, now):
                         self._on_signal(signal.model_dump(mode="json"))
                 except Exception:
                     logger.exception("Error polling query: %s", query)
@@ -66,6 +72,19 @@ class RealtimeNewsPipeline:
     def stop(self) -> None:
         """Stop the polling loop."""
         self._running = False
+
+    def _should_emit(self, story_id: str, now: datetime) -> bool:
+        """Return True when the story has not already been emitted recently."""
+        if not story_id:
+            return True
+        if story_id in self._seen_story_ids:
+            return False
+
+        self._seen_story_ids[story_id] = now
+        if len(self._seen_story_ids) > self._dedup_cache_size:
+            oldest_story_id = min(self._seen_story_ids, key=self._seen_story_ids.get)
+            self._seen_story_ids.pop(oldest_story_id, None)
+        return True
 
 
 __all__ = ["RealtimeNewsPipeline"]

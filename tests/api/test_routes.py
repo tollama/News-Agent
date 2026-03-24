@@ -15,17 +15,19 @@ from storage.writers import JsonlWriter
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    monkeypatch.delenv("NEWS_AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("API_KEY", raising=False)
     agent = NewsAgent(connectors=[])
     init_agent(agent)
     with TestClient(app) as c:
         yield c
 
 
-def _make_signal() -> NewsSignal:
+def _make_signal(story_id: str = "test-story") -> NewsSignal:
     now = datetime.now(UTC)
     return NewsSignal(
-        story_id="test-story",
+        story_id=story_id,
         headline="Test headline",
         source_name="Reuters",
         published_at=now,
@@ -49,6 +51,14 @@ def test_health(client):
     assert resp.json()["status"] == "ok"
 
 
+def test_ready(client):
+    resp = client.get("/api/v1/news/ready")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["service"] == "news-agent"
+    assert body["ready"] is True
+
+
 def test_signals(client):
     signal = _make_signal()
     with patch.object(NewsAgent, "process_query", new_callable=AsyncMock, return_value=signal):
@@ -69,6 +79,7 @@ def test_signals_invalid_dates(client):
         },
     )
     assert resp.status_code == 400
+    assert resp.json()["error"]["message"] == "from_date must be <= to_date"
 
 
 def test_analyze(client):
@@ -83,13 +94,64 @@ def test_analyze(client):
 
 def test_503_when_not_initialized(client):
     import api.routes as routes
+
     old = routes._agent
     routes._agent = None
     try:
         resp = client.get("/api/v1/news/signals", params={"query": "test"})
         assert resp.status_code == 503
+        assert resp.json()["error"]["message"] == "Agent not initialized"
     finally:
         routes._agent = old
+
+
+def test_api_key_is_optional_when_not_configured(client):
+    response = client.post(
+        "/api/v1/news/analyze",
+        json={"text": "Federal Reserve raises rates", "query": "fed"},
+    )
+    assert response.status_code == 200
+
+
+def test_api_key_required_via_x_api_key(monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_API_KEY", "secret-news-key")
+    init_agent(NewsAgent(connectors=[]))
+
+    with TestClient(app) as local_client:
+        unauthorized = local_client.post(
+            "/api/v1/news/analyze",
+            json={"text": "Federal Reserve raises rates", "query": "fed"},
+        )
+        assert unauthorized.status_code == 401
+        assert unauthorized.json()["error"]["message"] == "Invalid or missing API key"
+
+        authorized = local_client.post(
+            "/api/v1/news/analyze",
+            headers={"X-API-Key": "secret-news-key"},
+            json={"text": "Federal Reserve raises rates", "query": "fed"},
+        )
+        assert authorized.status_code == 200
+
+
+def test_api_key_required_via_bearer_token(monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_API_KEY", "secret-news-key")
+    init_agent(NewsAgent(connectors=[]))
+
+    with TestClient(app) as local_client:
+        response = local_client.get(
+            "/api/v1/news/signals",
+            headers={"Authorization": "Bearer secret-news-key"},
+            params={"query": "test"},
+        )
+        assert response.status_code == 200
+
+
+def test_validation_errors_return_json_envelope(client):
+    response = client.post("/api/v1/news/analyze", json={"query": "fed"})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+    assert body["error"]["details"]
 
 
 def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):
@@ -185,3 +247,4 @@ def test_stories_route_returns_404_when_story_missing(tmp_path, monkeypatch):
         response = client.get("/stories/missing-story")
 
     assert response.status_code == 404
+    assert response.json()["error"]["code"] == "http_error"

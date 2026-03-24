@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 import os
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
@@ -77,6 +78,53 @@ def _data_dir() -> str:
     return os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw")
 
 
+def _auth_api_key() -> str | None:
+    for env_name in ("NEWS_AGENT_API_KEY", "API_KEY"):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return None
+
+
+def _json_error(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        },
+    )
+
+
+async def require_api_key(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Optional API key auth.
+
+    When NEWS_AGENT_API_KEY or API_KEY is set, callers must provide either
+    X-API-Key: <key> or Authorization: Bearer <key>.
+    """
+    expected = _auth_api_key()
+    if not expected:
+        return
+
+    bearer_token: str | None = None
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            bearer_token = token.strip()
+
+    provided = x_api_key or bearer_token
+    if provided != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+        )
+
+
 def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
     reader = JsonlReader(base_dir=_data_dir())
     payload = reader.find_first("trust_payloads", "story_id", story_id)
@@ -114,12 +162,52 @@ def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    message = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    return _json_error(exc.status_code, "http_error", message)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "code": "validation_error",
+                "message": "Request validation failed",
+                "details": exc.errors(),
+            },
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled error while serving %s %s", request.method, request.url.path)
+    return _json_error(500, "internal_error", "Internal server error")
+
+
 @app.get("/api/v1/news/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "news-agent"}
 
 
-@app.get("/api/v1/news/signals")
+@app.get("/api/v1/news/ready")
+async def readiness() -> dict[str, Any]:
+    ready = _agent is not None
+    return {
+        "status": "ok" if ready else "degraded",
+        "service": "news-agent",
+        "ready": ready,
+        "data_dir": _data_dir(),
+    }
+
+
+@app.get("/api/v1/news/signals", dependencies=[Depends(require_api_key)])
 async def get_signals(
     query: str = Query(..., min_length=1, max_length=500),
     from_date: datetime | None = Query(None, alias="from"),
@@ -144,7 +232,7 @@ async def get_signals(
     }
 
 
-@app.get("/api/v1/news/trust/{story_id:path}")
+@app.get("/api/v1/news/trust/{story_id:path}", dependencies=[Depends(require_api_key)])
 async def get_trust(story_id: str) -> dict[str, Any]:
     """Get trust payload for a specific story.
 
@@ -160,7 +248,7 @@ async def get_trust(story_id: str) -> dict[str, Any]:
     return _normalize_compat_payload(payload)
 
 
-@app.post("/api/v1/news/analyze")
+@app.post("/api/v1/news/analyze", dependencies=[Depends(require_api_key)])
 async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
     """Analyze arbitrary text for news trust signals."""
     agent = get_agent()
@@ -173,7 +261,7 @@ async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
 
 
 # Compatibility alias for tollama HttpNewsConnector (GET /stories/{id})
-@app.get("/stories/{story_id:path}")
+@app.get("/stories/{story_id:path}", dependencies=[Depends(require_api_key)])
 async def stories_compat(story_id: str) -> dict[str, Any]:
     """Compatibility endpoint for tollama's HttpNewsConnector."""
     return await get_trust(story_id)

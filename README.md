@@ -6,7 +6,10 @@ The current implementation already includes:
 
 - async connectors for `NewsAPI`, `GDELT`, and `RSS`
 - a `NewsAgent` orchestrator for fetch -> feature build -> trust scoring
-- a FastAPI surface for health, signal generation, and trust payload access
+- a FastAPI surface for health, readiness, signal generation, and trust payload access
+- optional API-key protection for non-health endpoints via `NEWS_AGENT_API_KEY` or `API_KEY`
+- lightweight persisted `story_id` lookup indexing for faster trust artifact reads
+- polling pipeline deduplication to avoid re-emitting the same story repeatedly
 - batch and polling pipeline classes
 - schema and feature tests that currently pass
 
@@ -56,10 +59,13 @@ The current test suite passes in this workspace.
 Defined in [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/api/routes.py):
 
 - `GET /api/v1/news/health`
+- `GET /api/v1/news/ready`
 - `GET /api/v1/news/signals`
 - `GET /api/v1/news/trust/{story_id}`
 - `POST /api/v1/news/analyze`
 - `GET /stories/{story_id}` for compatibility
+
+When `NEWS_AGENT_API_KEY` (or fallback `API_KEY`) is set, all non-health/readiness API routes require either `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 
 Important: the FastAPI app expects `init_agent(...)` to be called before handling requests. This repository does not currently include a dedicated startup module that reads `configs/default.yaml` and wires connectors automatically.
 
