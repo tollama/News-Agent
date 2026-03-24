@@ -704,3 +704,32 @@ def test_signals_route_rejects_invalid_persisted_cursor(client):
 
     assert response.status_code == 400
     assert response.json()["error"]["message"] == "cursor must be a valid persisted signals cursor"
+
+
+def test_openapi_documents_product_facing_route_metadata(client):
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    signals_operation = schema["paths"]["/api/v1/news/signals"]["get"]
+    assert signals_operation["summary"] == "Fetch a live signal or list persisted signals"
+    assert "Persisted mode (`persisted=true`)" in signals_operation["description"]
+    assert signals_operation["tags"] == ["signals"]
+    assert "400" in signals_operation["responses"]
+    assert "422" in signals_operation["responses"]
+
+    trust_operation = schema["paths"]["/api/v1/news/trust/{story_id}"]["get"]
+    assert trust_operation["summary"] == "Fetch a normalized trust payload for one story"
+    assert trust_operation["tags"] == ["trust"]
+
+
+def test_openapi_exposes_union_response_for_live_and_persisted_signals(client):
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    response_schema = schema["paths"]["/api/v1/news/signals"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    options = response_schema["anyOf"]
+    refs = {option["$ref"] for option in options}
+    assert "#/components/schemas/LiveSignalResponse" in refs
+    assert "#/components/schemas/PersistedSignalPage" in refs

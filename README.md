@@ -108,6 +108,175 @@ Pagination notes:
 - Invalid persisted cursors return `400` with `cursor must be a valid persisted signals cursor`.
 - When `persisted` is omitted/false, `query` is required and the response shape switches to the live contract: `{ "signal": ..., "trust": ..., "source": "live" }`.
 
+### Example: live signals request
+
+```bash
+curl --get "$BASE_URL/api/v1/news/signals" \
+  -H "X-API-Key: $NEWS_AGENT_API_KEY" \
+  --data-urlencode "query=fed rates" \
+  --data-urlencode "limit=5"
+```
+
+Example live response:
+
+```json
+{
+  "signal": {
+    "story_id": "fed-rates-2026-03-24",
+    "headline": "Federal Reserve holds rates steady",
+    "source_name": "Reuters",
+    "published_at": "2026-03-24T12:00:00+00:00",
+    "analyzed_at": "2026-03-24T12:00:03+00:00",
+    "entities": ["Federal Reserve", "Jerome Powell"],
+    "article_count": 6,
+    "query": "fed rates"
+  },
+  "trust": {
+    "trust_score": 0.82,
+    "risk_category": "low",
+    "calibration_status": "well_calibrated",
+    "components": {
+      "source_credibility": 0.91,
+      "corroboration": 0.78,
+      "contradiction_penalty": 0.04
+    }
+  },
+  "source": "live"
+}
+```
+
+### Example: persisted signals request
+
+```bash
+curl --get "$BASE_URL/api/v1/news/signals" \
+  -H "Authorization: Bearer $NEWS_AGENT_API_KEY" \
+  --data-urlencode "persisted=true" \
+  --data-urlencode "query=fed" \
+  --data-urlencode "story_id=fed-rates-2026-03-24" \
+  --data-urlencode "limit=2"
+```
+
+Example persisted response:
+
+```json
+{
+  "signals": [
+    {
+      "story_id": "fed-rates-2026-03-24",
+      "headline": "Federal Reserve holds rates steady",
+      "source_name": "Reuters",
+      "published_at": "2026-03-24T12:00:00+00:00",
+      "analyzed_at": "2026-03-24T12:00:03+00:00",
+      "entities": ["Federal Reserve", "Jerome Powell"],
+      "article_count": 6,
+      "query": "fed rates"
+    }
+  ],
+  "count": 1,
+  "has_more": false,
+  "next_cursor": null,
+  "source": "persisted"
+}
+```
+
+### Example: recent stories request
+
+```bash
+curl --get "$BASE_URL/api/v1/news/stories/recent" \
+  -H "X-API-Key: $NEWS_AGENT_API_KEY" \
+  --data-urlencode "query=powell" \
+  --data-urlencode "limit=3"
+```
+
+Example stories response:
+
+```json
+{
+  "stories": [
+    {
+      "story_id": "fed-rates-2026-03-24",
+      "headline": "Federal Reserve holds rates steady",
+      "query": "fed rates",
+      "source_name": "Reuters",
+      "published_at": "2026-03-24T12:00:00+00:00",
+      "analyzed_at": "2026-03-24T12:00:03+00:00",
+      "article_count": 6,
+      "entities": ["Federal Reserve", "Jerome Powell"],
+      "trust_score": 0.82,
+      "risk_category": "low",
+      "calibration_status": "well_calibrated"
+    }
+  ],
+  "count": 1
+}
+```
+
+### Example: recent clusters request
+
+```bash
+curl --get "$BASE_URL/api/v1/news/clusters/recent" \
+  -H "X-API-Key: $NEWS_AGENT_API_KEY" \
+  --data-urlencode "query=fed" \
+  --data-urlencode "limit=2"
+```
+
+Example clusters response:
+
+```json
+{
+  "clusters": [
+    {
+      "cluster_id": "recent-cluster-1",
+      "headline": "Federal Reserve holds rates as Powell signals patience",
+      "query": "fed rates",
+      "story_ids": ["fed-rates-2026-03-24", "powell-guidance-2026-03-24"],
+      "story_count": 2,
+      "total_article_count": 7,
+      "source_names": ["Reuters", "AP"],
+      "top_entities": ["Federal Reserve", "Jerome Powell"],
+      "latest_published_at": "2026-03-24T12:00:00+00:00",
+      "latest_analyzed_at": "2026-03-24T12:00:03+00:00",
+      "avg_trust_score": 0.81,
+      "max_trust_score": 0.88,
+      "risk_category": "low",
+      "calibration_status": "well_calibrated"
+    }
+  ],
+  "count": 1
+}
+```
+
+### Example: trust payload request
+
+```bash
+curl "$BASE_URL/api/v1/news/trust/fed-rates-2026-03-24" \
+  -H "X-API-Key: $NEWS_AGENT_API_KEY"
+```
+
+Connector-compatible alias:
+
+```bash
+curl "$BASE_URL/stories/fed-rates-2026-03-24" \
+  -H "X-API-Key: $NEWS_AGENT_API_KEY"
+```
+
+Example trust payload response:
+
+```json
+{
+  "story_id": "fed-rates-2026-03-24",
+  "source_credibility": 0.91,
+  "corroboration": 0.78,
+  "contradiction_score": 0.04,
+  "propagation_delay_seconds": 45.0,
+  "freshness_score": 0.97,
+  "novelty": 0.33,
+  "trust_score": 0.82,
+  "risk_category": "low",
+  "calibration_status": "well_calibrated"
+}
+```
+
 Important: the FastAPI app expects `init_agent(...)` to be called before handling requests. This repository does not currently include a dedicated startup module that reads `configs/default.yaml` and wires connectors automatically.
 
 ## Minimal Bootstrap Pattern

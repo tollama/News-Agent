@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.news_agent import NewsAgent
 from services.persisted_story_clusters import PersistedStoryClusterService
@@ -43,24 +43,93 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="News Agent", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(
+    title="News Agent",
+    version="0.1.0",
+    lifespan=_lifespan,
+    description=(
+        "HTTP surface for live news trust analysis plus persisted signal, story, and cluster reads "
+        "consumed by Tollama connectors and internal product clients."
+    ),
+)
+
+
+class ErrorBody(BaseModel):
+    """Normalized error payload returned by API routes."""
+
+    code: str = Field(description="Stable machine-readable error code", examples=["validation_error"])
+    message: str = Field(description="Human-readable error message")
+    details: list[dict[str, Any]] | None = Field(default=None, description="Optional validation details")
+
+
+class ErrorEnvelope(BaseModel):
+    """Top-level error envelope."""
+
+    error: ErrorBody
 
 
 class AnalyzeRequest(BaseModel):
     """Request body for /analyze endpoint."""
 
-    text: str
-    query: str = ""
+    text: str = Field(description="Freeform text or headline to score", examples=["Federal Reserve holds rates steady"])
+    query: str = Field(default="", description="Optional user/search query context", examples=["fed rates"])
 
 
-class TrustResponse(BaseModel):
-    """Response for trust endpoints."""
+class PersistedSignalPage(BaseModel):
+    """Persisted signals page returned by GET /api/v1/news/signals?persisted=true."""
+
+    signals: list[dict[str, Any]]
+    count: int
+    has_more: bool
+    next_cursor: str | None = None
+    source: str = Field(default="persisted", examples=["persisted"])
+
+
+class LiveSignalResponse(BaseModel):
+    """Live signal analysis returned by GET /api/v1/news/signals."""
+
+    signal: dict[str, Any]
+    trust: dict[str, Any]
+    source: str = Field(default="live", examples=["live"])
+
+
+class RecentStoriesResponse(BaseModel):
+    """Recent persisted story summaries."""
+
+    stories: list[dict[str, Any]]
+    count: int
+
+
+class RecentClustersResponse(BaseModel):
+    """Recent persisted cluster summaries."""
+
+    clusters: list[dict[str, Any]]
+    count: int
+
+
+class TrustPayloadResponse(BaseModel):
+    """Normalized trust payload shape returned for a persisted story."""
 
     story_id: str
-    trust_score: float
-    risk_category: str
-    components: dict[str, Any]
-    payload: dict[str, Any]
+    source_credibility: float | None = None
+    corroboration: float | None = None
+    contradiction_score: float | None = None
+    propagation_delay_seconds: float | None = None
+    freshness_score: float | None = None
+    novelty: float | None = None
+    trust_score: float | None = None
+    risk_category: str | None = None
+    calibration_status: str | None = None
+    components: dict[str, Any] | None = None
+
+
+API_ERROR_RESPONSES = {
+    400: {"model": ErrorEnvelope, "description": "Bad request"},
+    401: {"model": ErrorEnvelope, "description": "Authentication failed"},
+    404: {"model": ErrorEnvelope, "description": "Artifact not found"},
+    422: {"model": ErrorEnvelope, "description": "Validation error"},
+    500: {"model": ErrorEnvelope, "description": "Internal server error"},
+}
 
 
 def get_agent() -> NewsAgent:
@@ -211,12 +280,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return _json_error(500, "internal_error", "Internal server error")
 
 
-@app.get("/api/v1/news/health")
+@app.get(
+    "/api/v1/news/health",
+    tags=["system"],
+    summary="Health check",
+    description="Lightweight liveness probe for load balancers and local service checks.",
+)
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "news-agent"}
 
 
-@app.get("/api/v1/news/ready")
+@app.get(
+    "/api/v1/news/ready",
+    tags=["system"],
+    summary="Readiness and storage status",
+    description="Reports whether the agent is initialized and whether persisted storage is writable.",
+)
 async def readiness() -> dict[str, Any]:
     ready = _agent is not None
     storage = _story_store().readiness()
@@ -228,7 +307,19 @@ async def readiness() -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/news/signals", dependencies=[Depends(require_api_key)])
+@app.get(
+    "/api/v1/news/signals",
+    dependencies=[Depends(require_api_key)],
+    tags=["signals"],
+    summary="Fetch a live signal or list persisted signals",
+    description=(
+        "Live mode runs the full fetch → feature → trust pipeline and requires `query`. "
+        "Persisted mode (`persisted=true`) reads stored signal artifacts, supports product-facing filters, "
+        "and returns cursor pagination metadata."
+    ),
+    response_model=LiveSignalResponse | PersistedSignalPage,
+    responses=API_ERROR_RESPONSES,
+)
 async def get_signals(
     query: str | None = Query(None, min_length=1, max_length=500),
     from_date: datetime | None = Query(None, alias="from"),
@@ -282,7 +373,18 @@ async def get_signals(
     }
 
 
-@app.get("/api/v1/news/stories/recent", dependencies=[Depends(require_api_key)])
+@app.get(
+    "/api/v1/news/stories/recent",
+    dependencies=[Depends(require_api_key)],
+    tags=["stories"],
+    summary="List recent persisted story summaries",
+    description=(
+        "Returns consumer-friendly story summary rows backed by persisted artifacts, "
+        "including trust rollups when available."
+    ),
+    response_model=RecentStoriesResponse,
+    responses=API_ERROR_RESPONSES,
+)
 async def get_recent_stories(
     limit: int = Query(10, ge=1, le=100),
     query: str | None = Query(None, min_length=1, max_length=500),
@@ -295,7 +397,18 @@ async def get_recent_stories(
     }
 
 
-@app.get("/api/v1/news/clusters/recent", dependencies=[Depends(require_api_key)])
+@app.get(
+    "/api/v1/news/clusters/recent",
+    dependencies=[Depends(require_api_key)],
+    tags=["clusters"],
+    summary="List recent persisted cluster summaries",
+    description=(
+        "Returns recent event/story cluster summaries backed by explicit cluster artifacts "
+        "or reconstructed from persisted signals when needed."
+    ),
+    response_model=RecentClustersResponse,
+    responses=API_ERROR_RESPONSES,
+)
 async def get_recent_clusters(
     limit: int = Query(10, ge=1, le=100),
     query: str | None = Query(None, min_length=1, max_length=500),
@@ -308,7 +421,18 @@ async def get_recent_clusters(
     }
 
 
-@app.get("/api/v1/news/trust/{story_id:path}", dependencies=[Depends(require_api_key)])
+@app.get(
+    "/api/v1/news/trust/{story_id:path}",
+    dependencies=[Depends(require_api_key)],
+    tags=["trust"],
+    summary="Fetch a normalized trust payload for one story",
+    description=(
+        "Returns the persisted trust payload for a story id. This is the canonical product-facing "
+        "story trust endpoint and is also exposed via `/stories/{story_id}` for connector compatibility."
+    ),
+    response_model=TrustPayloadResponse,
+    responses=API_ERROR_RESPONSES,
+)
 async def get_trust(story_id: str) -> dict[str, Any]:
     """Get trust payload for a specific story.
 
@@ -324,7 +448,14 @@ async def get_trust(story_id: str) -> dict[str, Any]:
     return payload
 
 
-@app.post("/api/v1/news/analyze", dependencies=[Depends(require_api_key)])
+@app.post(
+    "/api/v1/news/analyze",
+    dependencies=[Depends(require_api_key)],
+    tags=["trust"],
+    summary="Analyze arbitrary text into a trust result",
+    description="Scores a caller-provided headline or text fragment without fetching external articles.",
+    responses=API_ERROR_RESPONSES,
+)
 async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
     """Analyze arbitrary text for news trust signals."""
     agent = get_agent()
@@ -337,7 +468,15 @@ async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
 
 
 # Compatibility alias for tollama HttpNewsConnector (GET /stories/{id})
-@app.get("/stories/{story_id:path}", dependencies=[Depends(require_api_key)])
+@app.get(
+    "/stories/{story_id:path}",
+    dependencies=[Depends(require_api_key)],
+    tags=["trust"],
+    summary="Compatibility alias for story trust payloads",
+    description="Connector-compatible alias for `/api/v1/news/trust/{story_id}`.",
+    response_model=TrustPayloadResponse,
+    responses=API_ERROR_RESPONSES,
+)
 async def stories_compat(story_id: str) -> dict[str, Any]:
     """Compatibility endpoint for tollama's HttpNewsConnector."""
     return await get_trust(story_id)
