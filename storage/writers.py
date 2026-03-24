@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from storage.sqlite_index import SQLiteArtifactIndex
+
+logger = logging.getLogger(__name__)
+
 
 class JsonlWriter:
-    """Write JSONL files for raw news data."""
+    """Write JSONL files for raw news data.
+
+    JSONL remains the append-log format, while a small SQLite sidecar is updated
+    to accelerate practical lookups across persisted artifacts.
+    """
 
     def __init__(self, base_dir: str = "data/raw") -> None:
         self._base_dir = Path(base_dir)
+        self._sqlite_index = SQLiteArtifactIndex(base_dir=base_dir)
 
     def write(
         self,
@@ -31,6 +41,12 @@ class JsonlWriter:
         with filepath.open("w") as fp:
             for record in records:
                 fp.write(json.dumps(record, default=str) + "\n")
+
+        try:
+            self._sqlite_index.upsert_records(dataset, date_str, filepath, records)
+        except Exception:  # pragma: no cover - fallback keeps JSONL writes alive
+            logger.exception("Failed to update SQLite artifact index for %s", filepath)
+
         return filepath
 
 

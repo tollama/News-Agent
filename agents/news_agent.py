@@ -11,10 +11,12 @@ from typing import Any
 
 import pandas as pd
 
+from calibration.corroboration import corroboration_score
 from calibration.news_trust_score import compute_news_trust
 from connectors.base import NewsDataConnector
 from connectors.normalizer_registry import normalize_article
 from features.build_features import build_news_features
+from features.story_cluster import build_cluster_summary, choose_representative_index
 from schemas.signals import NewsSignal
 
 logger = __import__("logging").getLogger(__name__)
@@ -228,24 +230,38 @@ class NewsAgent:
         df: pd.DataFrame,
         query: str,
     ) -> NewsSignal:
-        """Aggregate featured DataFrame into a single NewsSignal."""
-        now = datetime.now(UTC)
-        # Use the top-credibility article as representative
-        best_idx = df["source_credibility"].idxmax()
-        best = df.iloc[best_idx]
+        """Aggregate featured DataFrame into a single NewsSignal.
 
-        # Aggregate entities across all articles
+        Prefers the strongest multi-article story cluster when available instead
+        of anchoring on a single highest-credibility article.
+        """
+        now = datetime.now(UTC)
+        cluster_column = "story_cluster" if "story_cluster" in df.columns else None
+
+        if cluster_column is not None:
+            cluster_summaries = []
+            for cluster_id, cluster_df in df.groupby(cluster_column, sort=False):
+                summary = build_cluster_summary(df, cluster_df.index)
+                summary["cluster_id"] = cluster_id
+                cluster_summaries.append(summary)
+            selected_cluster = max(cluster_summaries, key=lambda item: item["aggregate_score"])
+            cluster_indices = selected_cluster["indices"]
+            cluster_df = df.iloc[cluster_indices]
+            representative_idx = choose_representative_index(df, cluster_indices)
+            best = df.iloc[representative_idx]
+        else:
+            representative_idx = int(df["source_credibility"].idxmax())
+            best = df.iloc[representative_idx]
+            cluster_df = df
+
         all_entities: list[str] = []
-        for ents in df["entities"]:
+        for ents in cluster_df["entities"]:
             if isinstance(ents, list):
                 all_entities.extend(ents)
         unique_entities = sorted(set(all_entities))
 
-        # Unique sources for corroboration
-        unique_sources = df["source_name"].nunique()
-        total = len(df)
-
-        from calibration.corroboration import corroboration_score
+        unique_sources = int(cluster_df["source_name"].nunique())
+        total = len(cluster_df)
 
         return NewsSignal(
             story_id=str(best.get("article_id", query)),
@@ -253,14 +269,14 @@ class NewsAgent:
             source_name=str(best.get("source_name", "unknown")),
             published_at=best.get("published_at", now),
             analyzed_at=now,
-            sentiment_score=float(df["sentiment_score"].mean()),
+            sentiment_score=float(cluster_df["sentiment_score"].mean()),
             entities=unique_entities[:50],
-            source_credibility=float(df["source_credibility"].max()),
+            source_credibility=float(cluster_df["source_credibility"].max()),
             corroboration=corroboration_score(total, unique_sources),
-            contradiction_score=float(df["contradiction_score"].mean()),
-            propagation_delay_seconds=float(df["propagation_delay_seconds"].mean()),
-            freshness_score=float(df["freshness_score"].max()),
-            novelty=float(df["novelty"].mean()),
+            contradiction_score=float(cluster_df["contradiction_score"].mean()),
+            propagation_delay_seconds=float(cluster_df["propagation_delay_seconds"].mean()),
+            freshness_score=float(cluster_df["freshness_score"].max()),
+            novelty=float(cluster_df["novelty"].mean()),
             article_count=total,
             query=query,
         )

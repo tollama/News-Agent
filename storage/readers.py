@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from storage.sqlite_index import SQLiteArtifactIndex
+
 
 class JsonlReader:
     """Read JSONL files for raw news data.
@@ -17,6 +19,7 @@ class JsonlReader:
     def __init__(self, base_dir: str = "data/raw") -> None:
         self._base_dir = Path(base_dir)
         self._index_cache: dict[tuple[str, str], dict[str, Path]] = {}
+        self._sqlite_index = SQLiteArtifactIndex(base_dir=base_dir)
 
     def read(self, dataset: str, date_str: str) -> list[dict[str, Any]]:
         """Read all records from a JSONL partition."""
@@ -51,6 +54,13 @@ class JsonlReader:
 
     def find_first(self, dataset: str, field: str, value: Any) -> dict[str, Any] | None:
         """Return the first record whose field equals the requested value."""
+        sqlite_result = self._sqlite_index.find_first(dataset, field, value)
+        if sqlite_result is not None:
+            # Warm the legacy in-memory cache for compatibility with existing tests
+            # and callers that introspect the reader cache.
+            self._get_index(dataset, field)
+            return sqlite_result
+
         indexed = self._find_first_indexed(dataset, field, value)
         if indexed is not None:
             return indexed

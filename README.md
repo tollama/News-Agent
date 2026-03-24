@@ -9,6 +9,8 @@ The current implementation already includes:
 - a FastAPI surface for health, readiness, signal generation, and trust payload access
 - optional API-key protection for non-health endpoints via `NEWS_AGENT_API_KEY` or `API_KEY`
 - lightweight persisted `story_id` lookup indexing for faster trust artifact reads
+- JSONL persistence with a SQLite sidecar index for practical artifact lookup without changing the append-log format
+- event/story clustering that can aggregate a dominant multi-article cluster instead of always anchoring on a single article
 - polling pipeline deduplication to avoid re-emitting the same story repeatedly
 - batch and polling pipeline classes
 - schema and feature tests that currently pass
@@ -34,7 +36,7 @@ The main execution path is:
 - `calibration/`: trust score composition
 - `pipelines/`: batch and polling workflows
 - `schemas/`: `ArticleSnapshot`, `NewsSignal`, and enums
-- `storage/`: JSONL read/write helpers
+- `storage/`: JSONL read/write helpers plus a SQLite artifact index sidecar
 - `configs/`: default configuration values in [`configs/default.yaml`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/configs/default.yaml)
 - `tests/`: unit coverage across schemas, features, connectors, calibration, pipelines, and agent contract behavior
 
@@ -99,9 +101,9 @@ Once initialized, the shared `app` object can be served by Uvicorn or mounted in
 
 - Trust scoring is heuristic and deterministic, not model-based.
 - Source credibility comes from a static source tier map.
-- Contradiction detection is currently a placeholder fixed to a low contradiction baseline.
-- Storage helpers exist, but the provided pipelines do not yet persist artifacts by default.
-- Provider-specific normalizer modules exist for `GDELT` and `RSS`, but the main `NewsAgent.process_query(...)` path currently normalizes fetched records through the NewsAPI snapshot normalizer.
+- Contradiction detection is still heuristic, but now aggregates at the selected story-cluster level instead of a single representative article only.
+- Storage helpers keep JSONL as the primary append log and additionally maintain `.artifacts.sqlite3` for fast lookups by persisted fields such as `story_id`.
+- Provider-specific normalizer modules exist for `GDELT` and `RSS`, and the main `NewsAgent.process_query(...)` path dispatches through the provider-aware normalizer registry.
 
 ## Detailed Design
 

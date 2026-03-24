@@ -11,6 +11,7 @@ from features.nlp.credibility import get_credibility_score
 from features.nlp.dedup import compute_novelty, find_duplicates
 from features.nlp.entities import extract_entities
 from features.nlp.sentiment import compute_sentiment
+from features.story_cluster import assign_story_clusters
 from utils.datetime_helpers import parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,9 @@ def build_news_features(articles: pd.DataFrame) -> pd.DataFrame:
                     df.loc[df.index[idx], "propagation_delay_seconds"] = max(0.0, delay)
             except (TypeError, ValueError):
                 pass
+
+    # Event/story cluster assignment for downstream aggregation
+    df["story_cluster"] = assign_story_clusters(df, clusters)
 
     # Corroboration (article count in same entity cluster / total)
     entity_overlap = _compute_entity_overlap(df)
