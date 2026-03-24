@@ -11,6 +11,7 @@ from typing import Any
 
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
+from storage.persisted_signals import PersistedSignalStore
 from storage.persisted_stories import PersistedStoryStore, build_story_summary
 from storage.writers import JsonlWriter
 
@@ -106,8 +107,8 @@ class RealtimeNewsPipeline:
         trust_result = self._agent.analyze(signal.model_dump(mode="json"))
         story_summary = build_story_summary(signal, trust_result)
 
-        writer.write([signal_payload], dataset="signals", date_str=date_str)
-        writer.write([trust_payload], dataset="trust_payloads", date_str=date_str)
+        PersistedSignalStore(writer=writer).write([signal_payload], date_str=date_str)
+        PersistedStoryStore(writer=writer).write_trust_payloads([trust_payload], date_str=date_str)
         PersistedStoryStore(writer=writer).write([story_summary], date_str=date_str)
 
 

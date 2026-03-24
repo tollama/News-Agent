@@ -11,6 +11,7 @@ from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
 from services.persisted_story_clusters import PersistedStoryClusterService
 from services.story_clusters import build_signal_cluster_summaries
+from storage.persisted_signals import PersistedSignalStore
 from storage.persisted_stories import PersistedStoryStore, build_story_summary
 from storage.story_clusters import StoryClusterStore
 from storage.writers import JsonlWriter
@@ -133,20 +134,14 @@ class NewsIngestPipeline:
                     base_dir=os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw"),
                 )
             signals = self._results.get("signals", [])
+            signal_store = PersistedSignalStore(writer=writer)
             if signals:
-                writer.write(
-                    signals,
-                    dataset="signals",
-                    date_str=now.strftime("%Y-%m-%d"),
-                )
+                signal_store.write_by_partition(signals)
+            story_store = PersistedStoryStore(writer=writer)
             if payloads:
-                writer.write(
-                    payloads,
-                    dataset="trust_payloads",
-                    date_str=now.strftime("%Y-%m-%d"),
-                )
+                story_store.write_trust_payloads_by_partition(payloads)
             if story_summaries:
-                PersistedStoryStore(writer=writer).write_by_partition(story_summaries)
+                story_store.write_by_partition(story_summaries)
             if cluster_summaries:
                 PersistedStoryClusterService(store=StoryClusterStore(writer=writer)).write_by_partition(
                     cluster_summaries,

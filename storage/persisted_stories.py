@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from schemas.signals import NewsSignal
+from storage.persisted_signals import PersistedSignalStore
 from storage.readers import JsonlReader
 from storage.writers import JsonlWriter
 
@@ -31,6 +32,7 @@ class PersistedStoryStore:
     ) -> None:
         self._reader = reader or JsonlReader()
         self._writer = writer or JsonlWriter(base_dir=str(self._reader.base_dir))
+        self._signal_store = PersistedSignalStore(reader=self._reader, writer=self._writer)
 
     def write(self, stories: list[dict[str, Any]], *, date_str: str | None = None) -> Any:
         """Persist explicit story summary artifacts when callers have them."""
@@ -92,12 +94,10 @@ class PersistedStoryStore:
                 stories = [story for story in stories if story_matches_query(story, query)]
             return stories[:limit]
 
-        signals = self._reader.list_recent("signals", limit=max(limit * 4, 20))
+        signals = self._signal_store.list_recent(limit=max(limit * 4, 20), query=query)
         generated_stories: list[dict[str, Any]] = []
         for signal_data in signals:
             signal = NewsSignal(**signal_data)
-            if not signal_matches_query(signal, query):
-                continue
             trust = dict(analyze_signal(signal)) if analyze_signal is not None else {}
             generated_stories.append(build_story_summary(signal, trust))
             if len(generated_stories) >= limit:
@@ -122,7 +122,7 @@ class PersistedStoryStore:
                 self.write_trust_payloads_by_partition([normalized])
             return normalized
 
-        signal_data = self._reader.find_first("signals", "story_id", story_id)
+        signal_data = self._signal_store.find_story(story_id)
         if signal_data is not None and to_trust_payload is not None:
             signal = NewsSignal(**signal_data)
             generated_payload = normalize_trust_payload(dict(to_trust_payload(signal)))

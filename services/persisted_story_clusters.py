@@ -7,9 +7,9 @@ from typing import Any
 
 from schemas.signals import NewsSignal
 from services.story_clusters import build_signal_cluster_summaries
+from storage.persisted_signals import PersistedSignalStore
 from storage.readers import JsonlReader
 from storage.story_clusters import StoryClusterStore
-from storage.persisted_stories import signal_matches_query
 
 
 class PersistedStoryClusterService:
@@ -27,6 +27,7 @@ class PersistedStoryClusterService:
     ) -> None:
         self._reader = reader or JsonlReader()
         self._store = store or StoryClusterStore(reader=self._reader)
+        self._signal_store = PersistedSignalStore(reader=self._reader)
 
     def list_recent(
         self,
@@ -42,11 +43,10 @@ class PersistedStoryClusterService:
         if persisted_clusters:
             return persisted_clusters
 
-        signals: list[NewsSignal] = []
-        for signal_data in self._reader.list_recent("signals", limit=max(limit * 8, 40)):
-            signal = NewsSignal(**signal_data)
-            if signal_matches_query(signal, query):
-                signals.append(signal)
+        signals = [
+            NewsSignal(**signal_data)
+            for signal_data in self._signal_store.list_recent(limit=max(limit * 8, 40), query=query)
+        ]
 
         if analyze_signal is None:
             return []
