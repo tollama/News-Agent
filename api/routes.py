@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 import os
-import re
 from datetime import datetime
 from typing import Any
 
@@ -18,15 +16,10 @@ from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
+from services.story_clusters import build_signal_cluster_summaries
 from storage.readers import JsonlReader
 
 logger = logging.getLogger(__name__)
-
-_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9'-]+")
-_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "into",
-    "is", "it", "of", "on", "or", "that", "the", "to", "was", "were", "will", "with",
-}
 
 # Agent is initialized at startup
 _agent: NewsAgent | None = None
@@ -174,34 +167,12 @@ def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _headline_tokens(text: str) -> set[str]:
-    return {
-        token.lower() for token in _TOKEN_RE.findall(text)
-        if token.lower() not in _STOPWORDS and len(token) > 2
-    }
-
-
 def _story_matches_query(signal: NewsSignal, query: str | None) -> bool:
     if not query:
         return True
     needle = query.lower()
     haystacks = [signal.query, signal.headline, signal.story_id, *signal.entities]
     return any(needle in str(value).lower() for value in haystacks)
-
-
-def _stories_are_related(left: NewsSignal, right: NewsSignal) -> bool:
-    left_entities = {entity.strip().lower() for entity in left.entities if entity.strip()}
-    right_entities = {entity.strip().lower() for entity in right.entities if entity.strip()}
-    entity_overlap = len(left_entities & right_entities)
-
-    left_tokens = _headline_tokens(left.headline)
-    right_tokens = _headline_tokens(right.headline)
-    token_overlap = len(left_tokens & right_tokens)
-
-    same_query = bool(left.query and right.query and left.query.strip().lower() == right.query.strip().lower())
-    same_story = left.story_id == right.story_id
-
-    return same_story or same_query or entity_overlap >= 2 or (entity_overlap >= 1 and token_overlap >= 2)
 
 
 def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
@@ -232,62 +203,40 @@ def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[
     return stories
 
 
+def _cluster_matches_query(cluster: Mapping[str, Any], query: str | None) -> bool:
+    if not query:
+        return True
+    needle = query.lower()
+    haystacks = [
+        cluster.get("query", ""),
+        cluster.get("headline", ""),
+        *(cluster.get("story_ids", []) or []),
+        *(cluster.get("top_entities", []) or []),
+    ]
+    return any(needle in str(value).lower() for value in haystacks)
+
+
 def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
     reader = _reader()
+
+    persisted_clusters = [
+        cluster for cluster in reader.list_recent("story_clusters", limit=max(limit * 4, 20))
+        if _cluster_matches_query(cluster, query)
+    ]
+    if persisted_clusters:
+        return persisted_clusters[:limit]
+
     signals: list[NewsSignal] = []
     for signal_data in reader.list_recent("signals", limit=max(limit * 8, 40)):
         signal = NewsSignal(**signal_data)
         if _story_matches_query(signal, query):
             signals.append(signal)
 
-    clusters: list[list[NewsSignal]] = []
-    for signal in signals:
-        placed = False
-        for cluster in clusters:
-            if any(_stories_are_related(signal, existing) for existing in cluster):
-                cluster.append(signal)
-                placed = True
-                break
-        if not placed:
-            clusters.append([signal])
-
-    cluster_summaries: list[dict[str, Any]] = []
-    for idx, cluster in enumerate(clusters, start=1):
-        sorted_cluster = sorted(
-            cluster,
-            key=lambda item: (item.analyzed_at, item.published_at),
-            reverse=True,
-        )
-        representative = sorted_cluster[0]
-        trust_scores = [get_agent().analyze(item.model_dump(mode="json"))["trust_score"] for item in cluster]
-        entity_counts = Counter(
-            entity.strip() for item in cluster for entity in item.entities if entity.strip()
-        )
-        source_names = sorted({item.source_name for item in cluster})
-        cluster_summaries.append(
-            {
-                "cluster_id": f"recent-cluster-{idx}",
-                "headline": representative.headline,
-                "query": representative.query,
-                "story_ids": [item.story_id for item in sorted_cluster],
-                "story_count": len(cluster),
-                "total_article_count": sum(item.article_count for item in cluster),
-                "source_names": source_names,
-                "top_entities": [name for name, _ in entity_counts.most_common(5)],
-                "latest_published_at": max(item.published_at for item in cluster).isoformat(),
-                "latest_analyzed_at": max(item.analyzed_at for item in cluster).isoformat(),
-                "avg_trust_score": sum(trust_scores) / len(trust_scores),
-                "max_trust_score": max(trust_scores),
-                "risk_category": get_agent().analyze(representative.model_dump(mode="json"))["risk_category"],
-                "calibration_status": get_agent().analyze(representative.model_dump(mode="json"))["calibration_status"],
-            }
-        )
-
-    cluster_summaries.sort(
-        key=lambda item: (item["story_count"], item["total_article_count"], item["latest_analyzed_at"]),
-        reverse=True,
-    )
-    return cluster_summaries[:limit]
+    return build_signal_cluster_summaries(
+        signals,
+        lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
+        cluster_id_prefix="recent-cluster",
+    )[:limit]
 
 
 @app.exception_handler(HTTPException)

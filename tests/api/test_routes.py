@@ -177,6 +177,45 @@ def test_recent_stories_route_reads_persisted_signals(tmp_path, monkeypatch):
     assert payload["stories"][0]["trust_score"] >= 0.0
 
 
+def test_recent_clusters_route_prefers_persisted_cluster_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                "cluster_id": "persisted-1",
+                "headline": "Federal Reserve holds rates as Powell signals patience",
+                "query": "fed rates",
+                "story_ids": ["fed-1", "fed-2"],
+                "story_count": 2,
+                "total_article_count": 7,
+                "source_names": ["AP", "Reuters"],
+                "top_entities": ["Federal Reserve", "Jerome Powell"],
+                "latest_published_at": "2026-03-24T12:00:00+00:00",
+                "latest_analyzed_at": "2026-03-24T12:05:00+00:00",
+                "avg_trust_score": 0.81,
+                "max_trust_score": 0.88,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            }
+        ],
+        dataset="story_clusters",
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/clusters/recent", params={"limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    first_cluster = payload["clusters"][0]
+    assert first_cluster["cluster_id"] == "persisted-1"
+    assert first_cluster["story_ids"] == ["fed-1", "fed-2"]
+    assert first_cluster["avg_trust_score"] == 0.81
+
+
 def test_recent_clusters_route_summarizes_related_persisted_signals(tmp_path, monkeypatch):
     monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
     init_agent(NewsAgent())

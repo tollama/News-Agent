@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from agents.news_agent import NewsAgent
+from schemas.signals import NewsSignal
+from services.story_clusters import build_signal_cluster_summaries
 from storage.writers import JsonlWriter
 
 logger = logging.getLogger(__name__)
@@ -106,15 +108,16 @@ class NewsIngestPipeline:
             self._results["trust_results"] = trust_results
 
         elif stage == "publish":
-            # Publish artifacts (trust payloads, signals)
-            payloads = []
-            for signal_data in self._results.get("signals", []):
-                from schemas.signals import NewsSignal
-
-                signal = NewsSignal(**signal_data)
-                payload = self._agent.to_trust_payload(signal)
-                payloads.append(payload)
+            # Publish artifacts (trust payloads, signals, cluster summaries)
+            signal_models = [NewsSignal(**signal_data) for signal_data in self._results.get("signals", [])]
+            payloads = [self._agent.to_trust_payload(signal) for signal in signal_models]
+            cluster_summaries = build_signal_cluster_summaries(
+                signal_models,
+                lambda signal: self._agent.analyze(signal.model_dump(mode="json")),
+                cluster_id_prefix=f"persisted-{now.strftime('%Y%m%d%H%M%S')}",
+            )
             self._results["trust_payloads"] = payloads
+            self._results["story_clusters"] = cluster_summaries
             writer = self._writer
             if writer is None:
                 writer = JsonlWriter(
@@ -133,10 +136,17 @@ class NewsIngestPipeline:
                     dataset="trust_payloads",
                     date_str=now.strftime("%Y-%m-%d"),
                 )
+            if cluster_summaries:
+                writer.write(
+                    cluster_summaries,
+                    dataset="story_clusters",
+                    date_str=now.strftime("%Y-%m-%d"),
+                )
             logger.info(
-                "Persisted %d signals and %d payloads",
+                "Persisted %d signals, %d payloads, and %d story clusters",
                 len(signals),
                 len(payloads),
+                len(cluster_summaries),
             )
             logger.info(
                 "Pipeline complete: %d queries, %d payloads",

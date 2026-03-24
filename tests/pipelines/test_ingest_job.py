@@ -46,7 +46,9 @@ async def test_full_pipeline_run():
     assert "signals" in results
     assert "trust_results" in results
     assert "trust_payloads" in results
+    assert "story_clusters" in results
     assert len(results["trust_payloads"]) == 1
+    assert len(results["story_clusters"]) == 1
     assert results["trust_payloads"][0]["story_id"] == "story:test"
 
 
@@ -63,8 +65,10 @@ async def test_pipeline_with_writer(tmp_path):
     # Check that files were written
     signals_dir = tmp_path / "signals"
     payloads_dir = tmp_path / "trust_payloads"
+    clusters_dir = tmp_path / "story_clusters"
     assert signals_dir.exists()
     assert payloads_dir.exists()
+    assert clusters_dir.exists()
 
 
 @pytest.mark.asyncio()

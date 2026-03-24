@@ -11,6 +11,7 @@ The current implementation already includes:
 - lightweight persisted `story_id` lookup indexing for faster trust artifact reads
 - JSONL persistence with a SQLite sidecar index for practical artifact lookup without changing the append-log format
 - event/story clustering that can aggregate a dominant multi-article cluster instead of always anchoring on a single article
+- a dedicated `services.story_clusters` module that centralizes cluster heuristics for feature extraction, pipeline publication, and API reads
 - polling pipeline deduplication to avoid re-emitting the same story repeatedly
 - batch and polling pipeline classes
 - schema and feature tests that currently pass
@@ -106,6 +107,7 @@ Once initialized, the shared `app` object can be served by Uvicorn or mounted in
 - Source credibility now loads from `configs/source_credibility.yaml` (overrideable via `NEWS_AGENT_CREDIBILITY_CONFIG`) instead of being hardcoded in-module.
 - Contradiction detection is still heuristic, but now aggregates at the selected story-cluster level instead of a single representative article only.
 - Storage helpers keep JSONL as the primary append log and additionally maintain `.artifacts.sqlite3` for fast lookups by persisted fields such as `story_id`, including recent persisted story summaries exposed by the API.
+- Batch publish now persists `story_clusters` artifacts as pragmatic cluster summaries, so `/api/v1/news/clusters/recent` can serve stored cluster views before falling back to ad hoc reconstruction from recent signals.
 - Provider-specific normalizer modules exist for `GDELT` and `RSS`, and the main `NewsAgent.process_query(...)` path dispatches through the provider-aware normalizer registry.
 
 ## Detailed Design
