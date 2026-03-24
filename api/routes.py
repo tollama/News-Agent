@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
 from services.story_clusters import build_signal_cluster_summaries
+from storage.persisted_stories import PersistedStoryStore, signal_matches_query
 from storage.readers import JsonlReader
 from storage.story_clusters import StoryClusterStore
 
@@ -131,18 +132,15 @@ async def require_api_key(
         )
 
 
+def _story_store() -> PersistedStoryStore:
+    return PersistedStoryStore(reader=_reader())
+
+
 def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
-    reader = _reader()
-    payload = reader.find_first("trust_payloads", "story_id", story_id)
-    if payload is not None:
-        return payload
-
-    signal_data = reader.find_first("signals", "story_id", story_id)
-    if signal_data is None:
-        return None
-
-    signal = NewsSignal(**signal_data)
-    return get_agent().to_trust_payload(signal)
+    return _story_store().find_story_payload(
+        story_id,
+        to_trust_payload=lambda signal: get_agent().to_trust_payload(signal),
+    )
 
 
 def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -168,40 +166,12 @@ def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _story_matches_query(signal: NewsSignal, query: str | None) -> bool:
-    if not query:
-        return True
-    needle = query.lower()
-    haystacks = [signal.query, signal.headline, signal.story_id, *signal.entities]
-    return any(needle in str(value).lower() for value in haystacks)
-
-
 def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
-    reader = _reader()
-    stories: list[dict[str, Any]] = []
-    for signal_data in reader.list_recent("signals", limit=max(limit * 4, 20)):
-        signal = NewsSignal(**signal_data)
-        if not _story_matches_query(signal, query):
-            continue
-        trust = get_agent().analyze(signal.model_dump(mode="json"))
-        stories.append(
-            {
-                "story_id": signal.story_id,
-                "headline": signal.headline,
-                "query": signal.query,
-                "source_name": signal.source_name,
-                "published_at": signal.published_at.isoformat(),
-                "analyzed_at": signal.analyzed_at.isoformat(),
-                "article_count": signal.article_count,
-                "entities": signal.entities,
-                "trust_score": trust["trust_score"],
-                "risk_category": trust["risk_category"],
-                "calibration_status": trust["calibration_status"],
-            }
-        )
-        if len(stories) >= limit:
-            break
-    return stories
+    return _story_store().list_recent(
+        limit=limit,
+        query=query,
+        analyze_signal=lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
+    )
 
 
 def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
@@ -215,7 +185,7 @@ def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> lis
     signals: list[NewsSignal] = []
     for signal_data in reader.list_recent("signals", limit=max(limit * 8, 40)):
         signal = NewsSignal(**signal_data)
-        if _story_matches_query(signal, query):
+        if signal_matches_query(signal, query):
             signals.append(signal)
 
     return build_signal_cluster_summaries(

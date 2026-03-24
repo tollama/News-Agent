@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
+from storage.persisted_stories import PersistedStoryStore
 from storage.story_clusters import StoryClusterStore
 from schemas.signals import NewsSignal
 from storage.writers import JsonlWriter
@@ -176,6 +177,43 @@ def test_recent_stories_route_reads_persisted_signals(tmp_path, monkeypatch):
     assert payload["count"] == 1
     assert payload["stories"][0]["story_id"] == "story-1"
     assert payload["stories"][0]["trust_score"] >= 0.0
+
+
+def test_recent_stories_route_uses_persisted_story_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    called: dict[str, object] = {}
+
+    def fake_list_recent(self, *, limit: int = 20, query: str | None = None, analyze_signal=None):
+        called["limit"] = limit
+        called["query"] = query
+        called["analyze_signal"] = callable(analyze_signal)
+        return [
+            {
+                "story_id": "story-1",
+                "headline": "Federal Reserve holds rates steady",
+                "query": "fed rates",
+                "source_name": "Reuters",
+                "published_at": "2026-03-24T12:00:00+00:00",
+                "analyzed_at": "2026-03-24T12:05:00+00:00",
+                "article_count": 2,
+                "entities": ["Federal Reserve", "Jerome Powell"],
+                "trust_score": 0.81,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            }
+        ]
+
+    monkeypatch.setattr(PersistedStoryStore, "list_recent", fake_list_recent)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/stories/recent", params={"limit": 3, "query": "powell"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["stories"][0]["story_id"] == "story-1"
+    assert called == {"limit": 3, "query": "powell", "analyze_signal": True}
 
 
 def test_recent_clusters_route_prefers_persisted_cluster_artifacts(tmp_path, monkeypatch):
@@ -360,6 +398,34 @@ def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):
     assert payload["story_id"] == "story-123"
     assert payload["contradiction_score"] == 0.05
     assert payload["contradiction_score"] != 0.95
+
+
+def test_stories_route_uses_persisted_story_store_for_lookup(monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", "/tmp/news-agent-test")
+    init_agent(NewsAgent())
+    called: dict[str, object] = {}
+
+    def fake_find_story_payload(self, story_id: str, *, to_trust_payload=None):
+        called["story_id"] = story_id
+        called["to_trust_payload"] = callable(to_trust_payload)
+        return {
+            "story_id": story_id,
+            "source_credibility": 0.91,
+            "corroboration": 0.82,
+            "contradiction_score": 0.05,
+            "propagation_delay_seconds": 45.0,
+            "freshness_score": 0.97,
+            "novelty": 0.33,
+        }
+
+    monkeypatch.setattr(PersistedStoryStore, "find_story_payload", fake_find_story_payload)
+
+    with TestClient(app) as client:
+        response = client.get("/stories/story-123")
+
+    assert response.status_code == 200
+    assert response.json()["story_id"] == "story-123"
+    assert called == {"story_id": "story-123", "to_trust_payload": True}
 
 
 def test_stories_route_falls_back_to_persisted_signal_without_inverting_contradiction_score(
