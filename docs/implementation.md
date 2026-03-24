@@ -20,11 +20,36 @@ The main runtime path is implemented by [`agents/news_agent.py`](/Users/yongchoe
 
 [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/api/routes.py) exposes three distinct behaviors:
 
-- `GET /api/v1/news/signals`: full fetch -> feature -> aggregate -> trust path
+- `GET /api/v1/news/signals` in **live mode**: full fetch -> feature -> aggregate -> trust path
+- `GET /api/v1/news/signals?persisted=true` in **persisted mode**: recent stored signal reads with filters and cursor pagination
 - `POST /api/v1/news/analyze`: direct scoring from user-provided text or partial payload
 - `GET /api/v1/news/trust/{story_id}`: compatibility payload generation for a single story id
 
 The API stores the agent in a module-level `_agent` variable and requires `init_agent(...)` to be called at startup time.
+
+#### Persisted signals pagination contract
+
+When `persisted=true`, `GET /api/v1/news/signals` accepts:
+
+- `limit` (`1-500`)
+- `cursor` (opaque token)
+- `query`
+- `story_id`
+- `from` / `to`
+
+The route validates `cursor` up front and returns `400` when it is not a valid persisted-signals cursor. The response shape is:
+
+```json
+{
+  "signals": [],
+  "count": 0,
+  "has_more": false,
+  "next_cursor": null,
+  "source": "persisted"
+}
+```
+
+`next_cursor` is generated from an internal offset cursor and should be treated as opaque by clients. When `persisted` is not set, the same route requires `query` and returns the live contract instead (`signal` + `trust` + `source: "live"`).
 
 ### Pipeline execution
 

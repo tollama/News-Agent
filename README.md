@@ -72,6 +72,42 @@ Defined in [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/New
 
 When `NEWS_AGENT_API_KEY` (or fallback `API_KEY`) is set, all non-health/readiness API routes require either `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 
+### `GET /api/v1/news/signals` modes
+
+This endpoint has two product-facing modes:
+
+- **Live mode** (default): runs the full fetch -> feature -> trust pipeline and **requires** `query`.
+- **Persisted mode** (`persisted=true`): returns stored signal artifacts and supports product-facing filters plus cursor pagination.
+
+Persisted-mode query parameters:
+
+- `persisted=true`
+- `limit` (`1-500`)
+- `cursor` (opaque pagination token returned by a previous persisted read)
+- `query` (matches persisted `query`, `headline`, `story_id`, `source_name`, or extracted `entities`)
+- `story_id`
+- `from` / `to` (ISO datetime window applied against `analyzed_at`, falling back to `published_at`)
+
+Persisted-mode response contract:
+
+```json
+{
+  "signals": [{ "story_id": "story-123", "headline": "..." }],
+  "count": 1,
+  "has_more": false,
+  "next_cursor": null,
+  "source": "persisted"
+}
+```
+
+Pagination notes:
+
+- Results are returned newest-first from persisted storage.
+- `next_cursor` is only present when `has_more=true`.
+- Pass `next_cursor` back unchanged to fetch the next page.
+- Invalid persisted cursors return `400` with `cursor must be a valid persisted signals cursor`.
+- When `persisted` is omitted/false, `query` is required and the response shape switches to the live contract: `{ "signal": ..., "trust": ..., "source": "live" }`.
+
 Important: the FastAPI app expects `init_agent(...)` to be called before handling requests. This repository does not currently include a dedicated startup module that reads `configs/default.yaml` and wires connectors automatically.
 
 ## Minimal Bootstrap Pattern
