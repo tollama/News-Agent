@@ -10,6 +10,7 @@ from typing import Any, Literal
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
 from services.story_clusters import build_signal_cluster_summaries
+from storage.persisted_stories import PersistedStoryStore, build_story_summary
 from storage.story_clusters import StoryClusterStore
 from storage.writers import JsonlWriter
 
@@ -109,15 +110,21 @@ class NewsIngestPipeline:
             self._results["trust_results"] = trust_results
 
         elif stage == "publish":
-            # Publish artifacts (trust payloads, signals, cluster summaries)
+            # Publish artifacts (trust payloads, story summaries, signals, cluster summaries)
             signal_models = [NewsSignal(**signal_data) for signal_data in self._results.get("signals", [])]
             payloads = [self._agent.to_trust_payload(signal) for signal in signal_models]
+            trust_results = self._results.get("trust_results", [])
+            story_summaries = [
+                build_story_summary(signal, trust_results[idx] if idx < len(trust_results) else None)
+                for idx, signal in enumerate(signal_models)
+            ]
             cluster_summaries = build_signal_cluster_summaries(
                 signal_models,
                 lambda signal: self._agent.analyze(signal.model_dump(mode="json")),
                 cluster_id_prefix=f"persisted-{now.strftime('%Y%m%d%H%M%S')}",
             )
             self._results["trust_payloads"] = payloads
+            self._results["story_summaries"] = story_summaries
             self._results["story_clusters"] = cluster_summaries
             writer = self._writer
             if writer is None:
@@ -137,15 +144,18 @@ class NewsIngestPipeline:
                     dataset="trust_payloads",
                     date_str=now.strftime("%Y-%m-%d"),
                 )
+            if story_summaries:
+                PersistedStoryStore(writer=writer).write_by_partition(story_summaries)
             if cluster_summaries:
                 StoryClusterStore(writer=writer).write(
                     cluster_summaries,
                     date_str=now.strftime("%Y-%m-%d"),
                 )
             logger.info(
-                "Persisted %d signals, %d payloads, and %d story clusters",
+                "Persisted %d signals, %d payloads, %d story summaries, and %d story clusters",
                 len(signals),
                 len(payloads),
+                len(story_summaries),
                 len(cluster_summaries),
             )
             logger.info(

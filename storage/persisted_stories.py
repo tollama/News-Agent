@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from schemas.signals import NewsSignal
@@ -30,6 +32,13 @@ class PersistedStoryStore:
         """Persist explicit story summary artifacts when callers have them."""
         return self._writer.write(stories, dataset="story_summaries", date_str=date_str)
 
+    def write_by_partition(self, stories: list[dict[str, Any]]) -> list[Any]:
+        """Persist story summaries grouped by their analyzed/published date."""
+        writes: list[Any] = []
+        for partition_date, partition_stories in _group_records_by_partition_date(stories).items():
+            writes.append(self.write(partition_stories, date_str=partition_date))
+        return writes
+
     def read(self, date_str: str) -> list[dict[str, Any]]:
         """Read persisted story summary artifacts for a partition."""
         return self._reader.read("story_summaries", date_str)
@@ -40,6 +49,7 @@ class PersistedStoryStore:
         limit: int = 20,
         query: str | None = None,
         analyze_signal: Callable[[NewsSignal], Mapping[str, Any]] | None = None,
+        persist_generated: bool = True,
     ) -> list[dict[str, Any]]:
         """List recent stories from persisted summaries or fallback signals."""
         stories = self._reader.list_recent("story_summaries", limit=max(limit * 4, 20))
@@ -49,16 +59,19 @@ class PersistedStoryStore:
             return stories[:limit]
 
         signals = self._reader.list_recent("signals", limit=max(limit * 4, 20))
-        results: list[dict[str, Any]] = []
+        generated_stories: list[dict[str, Any]] = []
         for signal_data in signals:
             signal = NewsSignal(**signal_data)
             if not signal_matches_query(signal, query):
                 continue
             trust = dict(analyze_signal(signal)) if analyze_signal is not None else {}
-            results.append(build_story_summary(signal, trust))
-            if len(results) >= limit:
+            generated_stories.append(build_story_summary(signal, trust))
+            if len(generated_stories) >= limit:
                 break
-        return results
+
+        if generated_stories and persist_generated:
+            self.write_by_partition(generated_stories)
+        return generated_stories
 
     def find_story_payload(
         self,
@@ -123,6 +136,37 @@ def story_matches_query(story: Mapping[str, Any], query: str | None) -> bool:
         *(story.get("entities", []) or []),
     ]
     return any(needle in str(value).lower() for value in haystacks)
+
+
+def _group_records_by_partition_date(records: list[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group persisted artifacts by date derived from analyzed/published timestamps."""
+    partitions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        partition_date = _partition_date_for_record(record)
+        partitions[partition_date].append(dict(record))
+    return dict(partitions)
+
+
+def _partition_date_for_record(record: Mapping[str, Any]) -> str:
+    for field in ("analyzed_at", "published_at"):
+        raw_value = record.get(field)
+        parsed = _parse_datetime(raw_value)
+        if parsed is not None:
+            return parsed.date().isoformat()
+    return datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 __all__ = [

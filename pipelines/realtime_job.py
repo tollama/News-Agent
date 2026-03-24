@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from agents.news_agent import NewsAgent
+from schemas.signals import NewsSignal
+from storage.persisted_stories import PersistedStoryStore, build_story_summary
+from storage.writers import JsonlWriter
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,7 @@ class RealtimeNewsPipeline:
         poll_interval_seconds: float = 60.0,
         on_signal: Callable[[dict[str, Any]], None] | None = None,
         dedup_cache_size: int = 512,
+        writer: JsonlWriter | None = None,
     ) -> None:
         self._agent = agent
         self._queries = queries
@@ -36,6 +41,7 @@ class RealtimeNewsPipeline:
         self._last_check: datetime | None = None
         self._seen_story_ids: dict[str, datetime] = {}
         self._dedup_cache_size = max(1, dedup_cache_size)
+        self._writer = writer
 
     async def run(self, max_iterations: int | None = None) -> None:
         """Start the polling loop."""
@@ -56,10 +62,12 @@ class RealtimeNewsPipeline:
                         from_date=since,
                         limit=50,
                     )
-                    if signal.article_count <= 0 or self._on_signal is None:
+                    if signal.article_count <= 0:
                         continue
                     if self._should_emit(signal.story_id, now):
-                        self._on_signal(signal.model_dump(mode="json"))
+                        self._persist_signal(signal)
+                        if self._on_signal is not None:
+                            self._on_signal(signal.model_dump(mode="json"))
                 except Exception:
                     logger.exception("Error polling query: %s", query)
 
@@ -85,6 +93,22 @@ class RealtimeNewsPipeline:
             oldest_story_id = min(self._seen_story_ids, key=self._seen_story_ids.get)
             self._seen_story_ids.pop(oldest_story_id, None)
         return True
+
+    def _persist_signal(self, signal: NewsSignal) -> None:
+        writer = self._writer
+        if writer is None:
+            writer = JsonlWriter(base_dir=os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw"))
+            self._writer = writer
+
+        date_str = signal.analyzed_at.date().isoformat()
+        signal_payload = signal.model_dump(mode="json")
+        trust_payload = self._agent.to_trust_payload(signal)
+        trust_result = self._agent.analyze(signal.model_dump(mode="json"))
+        story_summary = build_story_summary(signal, trust_result)
+
+        writer.write([signal_payload], dataset="signals", date_str=date_str)
+        writer.write([trust_payload], dataset="trust_payloads", date_str=date_str)
+        PersistedStoryStore(writer=writer).write([story_summary], date_str=date_str)
 
 
 __all__ = ["RealtimeNewsPipeline"]

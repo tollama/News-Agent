@@ -107,6 +107,10 @@ def test_persisted_story_store_builds_recent_stories_from_signals(tmp_path):
     assert [story["story_id"] for story in recent] == ["story-1"]
     assert recent[0]["risk_category"] == "low"
 
+    persisted = JsonlReader(base_dir=str(tmp_path)).find_first("story_summaries", "story_id", "story-1")
+    assert persisted is not None
+    assert persisted["trust_score"] == 0.82
+
 
 def test_persisted_story_store_finds_story_payload_via_signal_fallback(tmp_path):
     writer = JsonlWriter(base_dir=str(tmp_path))

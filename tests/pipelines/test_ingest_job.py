@@ -10,6 +10,7 @@ import pytest
 from agents.news_agent import NewsAgent
 from pipelines.ingest_job import NewsIngestPipeline
 from schemas.signals import NewsSignal
+from storage.readers import JsonlReader
 from storage.writers import JsonlWriter
 
 
@@ -46,10 +47,13 @@ async def test_full_pipeline_run():
     assert "signals" in results
     assert "trust_results" in results
     assert "trust_payloads" in results
+    assert "story_summaries" in results
     assert "story_clusters" in results
     assert len(results["trust_payloads"]) == 1
+    assert len(results["story_summaries"]) == 1
     assert len(results["story_clusters"]) == 1
     assert results["trust_payloads"][0]["story_id"] == "story:test"
+    assert results["story_summaries"][0]["story_id"] == "story:test"
 
 
 @pytest.mark.asyncio()
@@ -65,10 +69,15 @@ async def test_pipeline_with_writer(tmp_path):
     # Check that files were written
     signals_dir = tmp_path / "signals"
     payloads_dir = tmp_path / "trust_payloads"
+    summaries_dir = tmp_path / "story_summaries"
     clusters_dir = tmp_path / "story_clusters"
     assert signals_dir.exists()
     assert payloads_dir.exists()
+    assert summaries_dir.exists()
     assert clusters_dir.exists()
+
+    recent_summaries = JsonlReader(base_dir=str(tmp_path)).list_recent("story_summaries", limit=1)
+    assert recent_summaries[0]["story_id"] == "story:test"
 
 
 @pytest.mark.asyncio()
