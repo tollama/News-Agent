@@ -30,15 +30,15 @@ The main execution path is:
 
 ## Repository Layout
 
-- `agents/`: orchestration logic, primarily [`agents/news_agent.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/agents/news_agent.py)
-- `api/`: FastAPI routes in [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/api/routes.py)
+- `agents/`: orchestration logic, primarily [`agents/news_agent.py`](agents/news_agent.py)
+- `api/`: FastAPI routes in [`api/routes.py`](api/routes.py)
 - `connectors/`: provider clients and normalizers
 - `features/`: feature engineering and heuristic NLP helpers
 - `calibration/`: trust score composition
 - `pipelines/`: batch and polling workflows
 - `schemas/`: `ArticleSnapshot`, `NewsSignal`, and enums
 - `storage/`: JSONL read/write helpers plus a SQLite artifact index sidecar
-- `configs/`: default configuration values in [`configs/default.yaml`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/configs/default.yaml)
+- `configs/`: default configuration values in [`configs/default.yaml`](configs/default.yaml)
 - `tests/`: unit coverage across schemas, features, connectors, calibration, pipelines, and agent contract behavior
 
 ## Install
@@ -59,7 +59,7 @@ The current test suite passes in this workspace.
 
 ## API Surface
 
-Defined in [`api/routes.py`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/api/routes.py):
+Defined in [`api/routes.py`](api/routes.py):
 
 - `GET /api/v1/news/health`
 - `GET /api/v1/news/ready`
@@ -291,7 +291,7 @@ Example trust payload response:
 }
 ```
 
-Important: the FastAPI app expects `init_agent(...)` to be called before handling requests. This repository does not currently include a dedicated startup module that reads `configs/default.yaml` and wires connectors automatically.
+Important: callers can still inject a prebuilt agent via `init_agent(...)`, but the FastAPI app also includes lifespan bootstrap that attempts to load `configs/default.yaml` and wire enabled connectors automatically at startup.
 
 ## Minimal Bootstrap Pattern
 
@@ -331,4 +331,4 @@ Once initialized, the shared `app` object can be served by Uvicorn or mounted in
 
 ## Detailed Design
 
-Implementation details, data contracts, and follow-up gaps are documented in [`docs/implementation.md`](/Users/yongchoelchoi/Documents/TollamaAI-Github/News-Agent/docs/implementation.md).
+Implementation details, data contracts, and follow-up gaps are documented in [`docs/implementation.md`](docs/implementation.md).
