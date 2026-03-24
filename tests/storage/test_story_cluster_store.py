@@ -53,6 +53,50 @@ def test_story_cluster_store_write_read_and_query(tmp_path):
     assert [cluster["cluster_id"] for cluster in store.list_recent(limit=5, query="associated press")] == ["persisted-1"]
 
 
+def test_story_cluster_store_write_by_partition_uses_cluster_timestamps(tmp_path):
+    store = StoryClusterStore(reader=JsonlReader(base_dir=str(tmp_path)))
+
+    store.write_by_partition(
+        [
+            {
+                "cluster_id": "persisted-1",
+                "headline": "Federal Reserve holds rates steady",
+                "query": "fed rates",
+                "story_ids": ["fed-1"],
+                "story_count": 1,
+                "total_article_count": 2,
+                "source_names": ["Reuters"],
+                "top_entities": ["Federal Reserve"],
+                "latest_published_at": "2026-03-24T12:00:00+00:00",
+                "latest_analyzed_at": "2026-03-24T12:05:00+00:00",
+                "avg_trust_score": 0.81,
+                "max_trust_score": 0.81,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            },
+            {
+                "cluster_id": "persisted-2",
+                "headline": "Nvidia unveils AI chip roadmap",
+                "query": "ai chips",
+                "story_ids": ["ai-1"],
+                "story_count": 1,
+                "total_article_count": 2,
+                "source_names": ["Reuters"],
+                "top_entities": ["Nvidia"],
+                "latest_published_at": "2026-03-25T08:00:00+00:00",
+                "latest_analyzed_at": "2026-03-25T08:05:00+00:00",
+                "avg_trust_score": 0.75,
+                "max_trust_score": 0.75,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            },
+        ]
+    )
+
+    assert [cluster["cluster_id"] for cluster in store.read("2026-03-24")] == ["persisted-1"]
+    assert [cluster["cluster_id"] for cluster in store.read("2026-03-25")] == ["persisted-2"]
+
+
 def test_cluster_matches_query_checks_cluster_specific_fields():
     cluster = {
         "cluster_id": "persisted-fed-1",

@@ -15,11 +15,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from agents.news_agent import NewsAgent
-from schemas.signals import NewsSignal
-from services.story_clusters import build_signal_cluster_summaries
-from storage.persisted_stories import PersistedStoryStore, signal_matches_query
+from services.persisted_story_clusters import PersistedStoryClusterService
+from storage.persisted_stories import PersistedStoryStore
 from storage.readers import JsonlReader
-from storage.story_clusters import StoryClusterStore
 
 logger = logging.getLogger(__name__)
 
@@ -152,24 +150,12 @@ def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[
 
 
 def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
-    reader = _reader()
-    cluster_store = StoryClusterStore(reader=reader)
-
-    persisted_clusters = cluster_store.list_recent(limit=limit, query=query)
-    if persisted_clusters:
-        return persisted_clusters
-
-    signals: list[NewsSignal] = []
-    for signal_data in reader.list_recent("signals", limit=max(limit * 8, 40)):
-        signal = NewsSignal(**signal_data)
-        if signal_matches_query(signal, query):
-            signals.append(signal)
-
-    return build_signal_cluster_summaries(
-        signals,
-        lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
+    return PersistedStoryClusterService(reader=_reader()).list_recent(
+        limit=limit,
+        query=query,
+        analyze_signal=lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
         cluster_id_prefix="recent-cluster",
-    )[:limit]
+    )
 
 
 @app.exception_handler(HTTPException)

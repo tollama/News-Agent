@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from agents.news_agent import NewsAgent
 from schemas.signals import NewsSignal
+from services.persisted_story_clusters import PersistedStoryClusterService
 from services.story_clusters import build_signal_cluster_summaries
 from storage.persisted_stories import PersistedStoryStore, build_story_summary
 from storage.story_clusters import StoryClusterStore
@@ -147,9 +148,8 @@ class NewsIngestPipeline:
             if story_summaries:
                 PersistedStoryStore(writer=writer).write_by_partition(story_summaries)
             if cluster_summaries:
-                StoryClusterStore(writer=writer).write(
+                PersistedStoryClusterService(store=StoryClusterStore(writer=writer)).write_by_partition(
                     cluster_summaries,
-                    date_str=now.strftime("%Y-%m-%d"),
                 )
             logger.info(
                 "Persisted %d signals, %d payloads, %d story summaries, and %d story clusters",
