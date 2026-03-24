@@ -78,6 +78,10 @@ def _data_dir() -> str:
     return os.environ.get("NEWS_AGENT_DATA_DIR", "data/raw")
 
 
+def _reader() -> JsonlReader:
+    return JsonlReader(base_dir=_data_dir())
+
+
 def _auth_api_key() -> str | None:
     for env_name in ("NEWS_AGENT_API_KEY", "API_KEY"):
         value = os.environ.get(env_name)
@@ -126,7 +130,7 @@ async def require_api_key(
 
 
 def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
-    reader = JsonlReader(base_dir=_data_dir())
+    reader = _reader()
     payload = reader.find_first("trust_payloads", "story_id", story_id)
     if payload is not None:
         return payload
@@ -160,6 +164,34 @@ def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                     pass
 
     return normalized
+
+
+def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
+    reader = _reader()
+    stories: list[dict[str, Any]] = []
+    for signal_data in reader.list_recent("signals", limit=max(limit * 4, 20)):
+        signal = NewsSignal(**signal_data)
+        if query and query.lower() not in signal.query.lower() and query.lower() not in signal.headline.lower():
+            continue
+        trust = get_agent().analyze(signal.model_dump(mode="json"))
+        stories.append(
+            {
+                "story_id": signal.story_id,
+                "headline": signal.headline,
+                "query": signal.query,
+                "source_name": signal.source_name,
+                "published_at": signal.published_at.isoformat(),
+                "analyzed_at": signal.analyzed_at.isoformat(),
+                "article_count": signal.article_count,
+                "entities": signal.entities,
+                "trust_score": trust["trust_score"],
+                "risk_category": trust["risk_category"],
+                "calibration_status": trust["calibration_status"],
+            }
+        )
+        if len(stories) >= limit:
+            break
+    return stories
 
 
 @app.exception_handler(HTTPException)
@@ -229,6 +261,19 @@ async def get_signals(
     return {
         "signal": signal.model_dump(mode="json"),
         "trust": trust_result,
+    }
+
+
+@app.get("/api/v1/news/stories/recent", dependencies=[Depends(require_api_key)])
+async def get_recent_stories(
+    limit: int = Query(10, ge=1, le=100),
+    query: str | None = Query(None, min_length=1, max_length=500),
+) -> dict[str, Any]:
+    """Return recent persisted story summaries backed by the SQLite sidecar."""
+    stories = _build_recent_story_summaries(limit=limit, query=query)
+    return {
+        "stories": stories,
+        "count": len(stories),
     }
 
 

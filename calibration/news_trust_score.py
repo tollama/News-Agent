@@ -17,6 +17,16 @@ _DEFAULT_WEIGHTS = {
 }
 
 
+def resolve_trust_weights(weights: dict[str, float] | None = None) -> dict[str, float]:
+    """Return normalized trust weights with sensible defaults for missing keys."""
+    resolved = dict(_DEFAULT_WEIGHTS)
+    if weights:
+        for name, value in weights.items():
+            if name in resolved:
+                resolved[name] = float(value)
+    return resolved
+
+
 def compute_news_trust(
     signal: NewsSignal,
     weights: dict[str, float] | None = None,
@@ -26,7 +36,7 @@ def compute_news_trust(
     Returns dict with trust_score and component breakdown compatible
     with NormalizedTrustResult.
     """
-    w = weights or _DEFAULT_WEIGHTS
+    w = resolve_trust_weights(weights)
 
     # Contradiction is inverted: high contradiction = low trust
     contradiction_component = max(0.0, 1.0 - signal.contradiction_score)
@@ -60,4 +70,4 @@ def compute_news_trust(
     }
 
 
-__all__ = ["compute_news_trust"]
+__all__ = ["compute_news_trust", "resolve_trust_weights"]

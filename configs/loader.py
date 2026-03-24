@@ -62,7 +62,8 @@ def bootstrap_agent(config: dict[str, Any]) -> NewsAgent:
         connectors.append(connector)
         logger.info("Created connector for %s", provider_name)
 
-    agent = NewsAgent(connectors=connectors)
+    trust_cfg = config.get("trust", {})
+    agent = NewsAgent(connectors=connectors, trust_weights=trust_cfg.get("weights"))
     logger.info("Bootstrapped NewsAgent with %d connector(s)", len(connectors))
     return agent
 

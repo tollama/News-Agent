@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from calibration.corroboration import corroboration_score
-from calibration.news_trust_score import compute_news_trust
+from calibration.news_trust_score import compute_news_trust, resolve_trust_weights
 from connectors.base import NewsDataConnector
 from connectors.normalizer_registry import normalize_article
 from features.build_features import build_news_features
@@ -40,8 +40,10 @@ class NewsAgent:
     def __init__(
         self,
         connectors: list[NewsDataConnector] | None = None,
+        trust_weights: dict[str, float] | None = None,
     ) -> None:
         self._connectors = connectors or []
+        self._trust_weights = resolve_trust_weights(trust_weights)
 
     def supports(self, context: dict[str, Any]) -> bool:
         """Return True if this agent can handle the given context."""
@@ -77,7 +79,7 @@ class NewsAgent:
                 query=payload.get("query", ""),
             )
 
-        trust_result = compute_news_trust(signal)
+        trust_result = compute_news_trust(signal, weights=self._trust_weights)
         return self._to_normalized_result(signal, trust_result)
 
     async def process_query(

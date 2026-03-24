@@ -24,7 +24,7 @@ def client(monkeypatch):
         yield c
 
 
-def _make_signal(story_id: str = "test-story") -> NewsSignal:
+def _make_signal(story_id: str = "test-story", query: str = "test") -> NewsSignal:
     now = datetime.now(UTC)
     return NewsSignal(
         story_id=story_id,
@@ -41,7 +41,7 @@ def _make_signal(story_id: str = "test-story") -> NewsSignal:
         freshness_score=0.9,
         novelty=0.5,
         article_count=1,
-        query="test",
+        query=query,
     )
 
 
@@ -152,6 +152,29 @@ def test_validation_errors_return_json_envelope(client):
     body = response.json()
     assert body["error"]["code"] == "validation_error"
     assert body["error"]["details"]
+
+
+def test_recent_stories_route_reads_persisted_signals(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            _make_signal("story-1", query="fed rates").model_dump(mode="json"),
+            _make_signal("story-2", query="ai chips").model_dump(mode="json"),
+        ],
+        dataset="signals",
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/news/stories/recent", params={"limit": 2, "query": "fed"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["stories"][0]["story_id"] == "story-1"
+    assert payload["stories"][0]["trust_score"] >= 0.0
 
 
 def test_stories_route_reads_persisted_trust_payload(tmp_path, monkeypatch):

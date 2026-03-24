@@ -1,0 +1,55 @@
+default_score: 0.40
+scores:
+  1: 0.95
+  2: 0.80
+  3: 0.65
+tiers:
+  1:
+    - associated press
+    - ap news
+    - reuters
+    - afp
+    - bbc news
+    - the new york times
+    - the washington post
+    - the wall street journal
+    - financial times
+    - the economist
+    - bloomberg
+    - cnbc
+  2:
+    - cnn
+    - nbc news
+    - abc news
+    - cbs news
+    - fox news
+    - the guardian
+    - politico
+    - npr
+    - pbs
+    - usa today
+    - los angeles times
+    - chicago tribune
+    - time
+    - newsweek
+    - forbes
+    - business insider
+    - techcrunch
+    - ars technica
+    - the verge
+    - nature
+    - science
+    - the lancet
+  3:
+    - axios
+    - the hill
+    - vox
+    - vice
+    - mashable
+    - wired
+    - engadget
+    - marketwatch
+    - yahoo finance
+    - seeking alpha
+    - coindesk
+    - cointelegraph

@@ -52,6 +52,14 @@ class JsonlReader:
                             records.append(json.loads(line))
         return records
 
+    def list_recent(self, dataset: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent dataset records, preferring the SQLite sidecar."""
+        recent = self._sqlite_index.list_recent(dataset, limit=limit)
+        if recent:
+            return recent
+        records = self.read_all(dataset)
+        return records[-limit:][::-1]
+
     def find_first(self, dataset: str, field: str, value: Any) -> dict[str, Any] | None:
         """Return the first record whose field equals the requested value."""
         sqlite_result = self._sqlite_index.find_first(dataset, field, value)

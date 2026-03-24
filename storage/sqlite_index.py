@@ -77,6 +77,23 @@ class SQLiteArtifactIndex:
             return None
         return json.loads(row[0])
 
+    def list_recent(self, dataset: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent distinct records for a dataset ordered by ingest time desc."""
+        safe_limit = max(1, min(int(limit), 200))
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT record_json
+                FROM artifact_records
+                WHERE dataset = ?
+                GROUP BY record_json
+                ORDER BY MAX(id) DESC
+                LIMIT ?
+                """,
+                (dataset, safe_limit),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def _initialize(self) -> None:
         with sqlite3.connect(self._db_path) as conn:
             conn.execute(
