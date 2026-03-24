@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from schemas.signals import NewsSignal
-from storage.persisted_stories import PersistedStoryStore, story_matches_query
+from storage.persisted_stories import PersistedStoryStore, normalize_trust_payload, story_matches_query
 from storage.readers import JsonlReader
 from storage.writers import JsonlWriter
 
@@ -173,6 +175,106 @@ def test_persisted_story_store_can_skip_persisting_generated_trust_payload(tmp_p
     assert payload is not None
     persisted = JsonlReader(base_dir=str(tmp_path)).find_first("trust_payloads", "story_id", "story-1")
     assert persisted is None
+
+
+def test_persisted_story_store_prefers_signal_fallback_over_summary_shape_for_trust_lookup(tmp_path):
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    signal = _make_signal("story-1")
+    writer.write([signal.model_dump(mode="json")], dataset="signals", date_str="2026-03-24")
+    writer.write(
+        [
+            {
+                "story_id": "story-1",
+                "headline": signal.headline,
+                "query": signal.query,
+                "source_name": signal.source_name,
+                "published_at": signal.published_at.isoformat(),
+                "analyzed_at": signal.analyzed_at.isoformat(),
+                "article_count": signal.article_count,
+                "entities": signal.entities,
+                "trust_score": 0.81,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            }
+        ],
+        dataset="story_summaries",
+        date_str="2026-03-24",
+    )
+    store = PersistedStoryStore(reader=JsonlReader(base_dir=str(tmp_path)))
+
+    payload = store.find_story_payload(
+        "story-1",
+        to_trust_payload=lambda row: {
+            "story_id": row.story_id,
+            "source_credibility": row.source_credibility,
+            "corroboration": row.corroboration,
+            "contradiction_score": row.contradiction_score,
+            "propagation_delay_seconds": row.propagation_delay_seconds,
+            "freshness_score": row.freshness_score,
+            "novelty": row.novelty,
+            "published_at": row.published_at.isoformat(),
+            "analyzed_at": row.analyzed_at.isoformat(),
+        },
+    )
+
+    assert payload is not None
+    assert payload["story_id"] == "story-1"
+    assert payload["source_credibility"] == 0.9
+    assert "headline" not in payload
+
+    persisted = JsonlReader(base_dir=str(tmp_path)).find_first("trust_payloads", "story_id", "story-1")
+    assert persisted is not None
+    assert persisted["contradiction_score"] == 0.1
+
+
+def test_persisted_story_store_normalizes_legacy_payload_and_persists_write_back(tmp_path):
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                "story_id": "story-legacy",
+                "payload": {
+                    "story_id": "story-legacy",
+                    "source_credibility": 0.91,
+                    "corroboration": 0.82,
+                    "components": {"contradiction_penalty": 0.95},
+                    "propagation_delay_seconds": 45.0,
+                    "freshness_score": 0.97,
+                    "novelty": 0.33,
+                    "published_at": "2026-03-24T12:00:00+00:00",
+                    "analyzed_at": "2026-03-24T12:05:00+00:00",
+                }
+            }
+        ],
+        dataset="trust_payloads",
+        date_str="2026-03-24",
+    )
+    store = PersistedStoryStore(reader=JsonlReader(base_dir=str(tmp_path)))
+
+    payload = store.find_story_payload("story-legacy")
+
+    assert payload is not None
+    assert payload["story_id"] == "story-legacy"
+    assert payload["contradiction_score"] == pytest.approx(0.05)
+
+    recent = JsonlReader(base_dir=str(tmp_path)).list_recent("trust_payloads", limit=1)
+    assert recent[0]["contradiction_score"] == pytest.approx(0.05)
+    assert "payload" not in recent[0]
+
+
+def test_normalize_trust_payload_handles_nested_and_legacy_shapes():
+    normalized = normalize_trust_payload(
+        {
+            "story_id": "story-legacy",
+            "payload": {
+                "story_id": "story-legacy",
+                "components": {"contradiction_penalty": 0.9},
+            },
+        }
+    )
+
+    assert normalized["story_id"] == "story-legacy"
+    assert normalized["contradiction_score"] == pytest.approx(0.1)
 
 
 def test_story_matches_query_checks_summary_fields():

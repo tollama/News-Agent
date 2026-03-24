@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import os
 from datetime import datetime
@@ -143,29 +143,6 @@ def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
     )
 
 
-def _normalize_compat_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize legacy adapter shapes to the raw NewsTrustPayload contract."""
-    normalized = dict(payload)
-    nested_payload = normalized.get("payload")
-    if isinstance(nested_payload, Mapping):
-        normalized = dict(nested_payload)
-
-    if normalized.get("contradiction_score") is None:
-        components = normalized.get("components")
-        if isinstance(components, Mapping):
-            contradiction_penalty = components.get("contradiction_penalty")
-            if contradiction_penalty is not None:
-                try:
-                    normalized["contradiction_score"] = max(
-                        0.0,
-                        min(1.0, 1.0 - float(contradiction_penalty)),
-                    )
-                except (TypeError, ValueError):
-                    pass
-
-    return normalized
-
-
 def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
     return _story_store().list_recent(
         limit=limit,
@@ -232,11 +209,12 @@ async def health() -> dict[str, str]:
 @app.get("/api/v1/news/ready")
 async def readiness() -> dict[str, Any]:
     ready = _agent is not None
+    storage = _story_store().readiness()
     return {
-        "status": "ok" if ready else "degraded",
+        "status": "ok" if ready and storage["data_dir_writable"] else "degraded",
         "service": "news-agent",
         "ready": ready,
-        "data_dir": _data_dir(),
+        **storage,
     }
 
 
@@ -304,7 +282,7 @@ async def get_trust(story_id: str) -> dict[str, Any]:
             status_code=404,
             detail=f"story_id {story_id!r} not found in persisted trust artifacts",
         )
-    return _normalize_compat_payload(payload)
+    return payload
 
 
 @app.post("/api/v1/news/analyze", dependencies=[Depends(require_api_key)])

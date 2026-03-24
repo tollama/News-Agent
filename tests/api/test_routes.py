@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from agents.news_agent import NewsAgent
 from api.routes import app, init_agent
 from storage.persisted_stories import PersistedStoryStore
+from storage.readers import JsonlReader
 from storage.story_clusters import StoryClusterStore
 from schemas.signals import NewsSignal
 from storage.writers import JsonlWriter
@@ -59,6 +60,9 @@ def test_ready(client):
     body = resp.json()
     assert body["service"] == "news-agent"
     assert body["ready"] is True
+    assert body["data_dir_exists"] is True
+    assert body["data_dir_writable"] is True
+    assert body["sqlite_index_path"].endswith(".artifacts.sqlite3")
 
 
 def test_signals(client):
@@ -454,25 +458,30 @@ def test_stories_route_falls_back_to_persisted_signal_without_inverting_contradi
     assert payload["contradiction_score"] != 0.95
 
 
-def test_stories_route_normalizes_legacy_contradiction_penalty_shape(monkeypatch):
-    import api.routes as routes
-
-    monkeypatch.setattr(
-        routes,
-        "_lookup_persisted_trust_payload",
-        lambda story_id: {
-            "story_id": story_id,
-            "source_credibility": 0.91,
-            "corroboration": 0.82,
-            "components": {
-                "contradiction_penalty": 0.95,
-            },
-            "propagation_delay_seconds": 45.0,
-            "freshness_score": 0.97,
-            "novelty": 0.33,
-        },
-    )
+def test_stories_route_normalizes_legacy_contradiction_penalty_shape(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
     init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    writer.write(
+        [
+            {
+                "story_id": "story-legacy",
+                "payload": {
+                    "story_id": "story-legacy",
+                    "source_credibility": 0.91,
+                    "corroboration": 0.82,
+                    "components": {
+                        "contradiction_penalty": 0.95,
+                    },
+                    "propagation_delay_seconds": 45.0,
+                    "freshness_score": 0.97,
+                    "novelty": 0.33,
+                },
+            }
+        ],
+        dataset="trust_payloads",
+        date_str="2026-03-24",
+    )
 
     with TestClient(app) as client:
         response = client.get("/stories/story-legacy")
@@ -482,6 +491,41 @@ def test_stories_route_normalizes_legacy_contradiction_penalty_shape(monkeypatch
     assert payload["story_id"] == "story-legacy"
     assert payload["contradiction_score"] == pytest.approx(0.05)
     assert payload["contradiction_score"] != 0.95
+
+
+def test_stories_route_prefers_signal_backfill_over_summary_shape(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWS_AGENT_DATA_DIR", str(tmp_path))
+    init_agent(NewsAgent())
+    writer = JsonlWriter(base_dir=str(tmp_path))
+    signal = _make_signal("story-123", query="fed rates")
+    writer.write([signal.model_dump(mode="json")], dataset="signals", date_str="2026-03-24")
+    PersistedStoryStore(reader=JsonlReader(base_dir=str(tmp_path))).write(
+        [
+            {
+                "story_id": "story-123",
+                "headline": signal.headline,
+                "query": signal.query,
+                "source_name": signal.source_name,
+                "published_at": signal.published_at.isoformat(),
+                "analyzed_at": signal.analyzed_at.isoformat(),
+                "article_count": signal.article_count,
+                "entities": signal.entities,
+                "trust_score": 0.81,
+                "risk_category": "low",
+                "calibration_status": "well_calibrated",
+            }
+        ],
+        date_str="2026-03-24",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/stories/story-123")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["story_id"] == "story-123"
+    assert payload["source_credibility"] == 0.9
+    assert "headline" not in payload
 
 
 def test_stories_route_returns_404_when_story_missing(tmp_path, monkeypatch):
