@@ -54,7 +54,9 @@ def _make_signal(story_id: str = "test-story", query: str = "test") -> NewsSigna
 def test_health(client):
     resp = client.get("/api/v1/news/health")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "news-agent"
 
 
 def test_ready(client):
@@ -77,6 +79,7 @@ def test_signals(client):
     assert "signal" in data
     assert "trust" in data
     assert data["source"] == "live"
+    assert "component_breakdown" in data["trust"]
 
 
 def test_signals_invalid_dates(client):
@@ -89,14 +92,18 @@ def test_signals_invalid_dates(client):
         },
     )
     assert resp.status_code == 400
-    assert resp.json()["error"]["message"] == "from_date must be <= to_date"
+    body = resp.json()
+    assert body["error"]["code"] == "bad_request"
+    assert body["error"]["message"] == "from_date must be <= to_date"
 
 
 def test_signals_requires_query_for_live_mode(client):
     resp = client.get("/api/v1/news/signals")
 
     assert resp.status_code == 422
-    assert resp.json()["error"]["message"] == "query is required unless persisted=true"
+    body = resp.json()
+    assert body["error"]["code"] == "validation_error"
+    assert body["error"]["message"] == "query is required unless persisted=true"
 
 
 def test_analyze(client):
@@ -107,6 +114,7 @@ def test_analyze(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "trust_score" in data
+    assert "component_breakdown" in data
 
 
 def test_503_when_not_initialized(client):
@@ -117,7 +125,9 @@ def test_503_when_not_initialized(client):
     try:
         resp = client.get("/api/v1/news/signals", params={"query": "test"})
         assert resp.status_code == 503
-        assert resp.json()["error"]["message"] == "Agent not initialized"
+        body = resp.json()
+        assert body["error"]["code"] == "service_unavailable"
+        assert body["error"]["message"] == "Agent not initialized"
     finally:
         routes._agent = old
 
@@ -140,6 +150,7 @@ def test_api_key_required_via_x_api_key(monkeypatch):
             json={"text": "Federal Reserve raises rates", "query": "fed"},
         )
         assert unauthorized.status_code == 401
+        assert unauthorized.json()["error"]["code"] == "auth_error"
         assert unauthorized.json()["error"]["message"] == "Invalid or missing API key"
 
         authorized = local_client.post(
@@ -616,6 +627,7 @@ def test_stories_route_normalizes_legacy_contradiction_penalty_shape(tmp_path, m
     payload = response.json()
     assert payload["story_id"] == "story-legacy"
     assert payload["contradiction_score"] == pytest.approx(0.05)
+    assert payload["components"] == {"contradiction_penalty": 0.95}
     assert payload["contradiction_score"] != 0.95
 
 
@@ -662,7 +674,7 @@ def test_stories_route_returns_404_when_story_missing(tmp_path, monkeypatch):
         response = client.get("/stories/missing-story")
 
     assert response.status_code == 404
-    assert response.json()["error"]["code"] == "http_error"
+    assert response.json()["error"]["code"] == "not_found"
 
 
 def test_signals_route_returns_cursor_metadata_for_persisted_reads(tmp_path, monkeypatch):
@@ -703,7 +715,9 @@ def test_signals_route_rejects_invalid_persisted_cursor(client):
     response = client.get("/api/v1/news/signals", params={"persisted": True, "cursor": "bad-cursor"})
 
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == "cursor must be a valid persisted signals cursor"
+    body = response.json()
+    assert body["error"]["code"] == "bad_request"
+    assert body["error"]["message"] == "cursor must be a valid persisted signals cursor"
 
 
 def test_openapi_documents_product_facing_route_metadata(client):
@@ -717,6 +731,7 @@ def test_openapi_documents_product_facing_route_metadata(client):
     assert signals_operation["tags"] == ["signals"]
     assert "400" in signals_operation["responses"]
     assert "422" in signals_operation["responses"]
+    assert "503" in signals_operation["responses"]
 
     trust_operation = schema["paths"]["/api/v1/news/trust/{story_id}"]["get"]
     assert trust_operation["summary"] == "Fetch a normalized trust payload for one story"
@@ -730,6 +745,9 @@ def test_openapi_documents_product_facing_route_metadata(client):
     assert analyze_request["$ref"] == "#/components/schemas/AnalyzeRequest"
     analyze_response = analyze_operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert analyze_response["$ref"] == "#/components/schemas/NormalizedTrustResult"
+
+    health_response = schema["paths"]["/api/v1/news/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert health_response["$ref"] == "#/components/schemas/HealthPayload"
 
     readiness_response = schema["paths"]["/api/v1/news/ready"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert readiness_response["$ref"] == "#/components/schemas/ReadinessPayload"
@@ -758,6 +776,9 @@ def test_openapi_exposes_union_response_for_live_and_persisted_signals(client):
 
     live_signal_response = schema["components"]["schemas"]["LiveSignalResponse"]
     assert live_signal_response["properties"]["trust"]["$ref"] == "#/components/schemas/NormalizedTrustResult"
+
+    health_payload = schema["components"]["schemas"]["HealthPayload"]
+    assert health_payload["properties"]["service"]["default"] == "news-agent"
 
     error_envelope = schema["components"]["schemas"]["ErrorEnvelope"]
     assert error_envelope["properties"]["error"]["$ref"] == "#/components/schemas/ErrorBody"

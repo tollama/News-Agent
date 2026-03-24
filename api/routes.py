@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import os
 from datetime import datetime
-from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -16,12 +15,15 @@ from fastapi.responses import JSONResponse
 from agents.news_agent import NewsAgent
 from schemas.api_models import (
     AnalyzeRequest,
+    ClusterSummary,
     ClusterSummaryListResponse,
     ErrorEnvelope,
+    HealthPayload,
     LiveSignalResponse,
     NormalizedTrustResult,
     PersistedSignalPage,
     ReadinessPayload,
+    StorySummary,
     StorySummaryListResponse,
     TrustPayloadResponse,
 )
@@ -70,6 +72,7 @@ API_ERROR_RESPONSES = {
     404: {"model": ErrorEnvelope, "description": "Artifact not found"},
     422: {"model": ErrorEnvelope, "description": "Validation error"},
     500: {"model": ErrorEnvelope, "description": "Internal server error"},
+    503: {"model": ErrorEnvelope, "description": "Service unavailable"},
 }
 
 
@@ -100,6 +103,16 @@ def _auth_api_key() -> str | None:
         if value:
             return value
     return None
+
+
+def _error_code_for_status(status_code: int) -> str:
+    return {
+        status.HTTP_400_BAD_REQUEST: "bad_request",
+        status.HTTP_401_UNAUTHORIZED: "auth_error",
+        status.HTTP_404_NOT_FOUND: "not_found",
+        status.HTTP_422_UNPROCESSABLE_ENTITY: "validation_error",
+        status.HTTP_503_SERVICE_UNAVAILABLE: "service_unavailable",
+    }.get(status_code, "http_error")
 
 
 def _json_error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -149,28 +162,33 @@ def _signal_store() -> PersistedSignalStore:
     return PersistedSignalStore(reader=_reader())
 
 
-def _lookup_persisted_trust_payload(story_id: str) -> dict[str, Any] | None:
-    return _story_store().find_story_payload(
+def _lookup_persisted_trust_payload(story_id: str) -> TrustPayloadResponse | None:
+    payload = _story_store().find_story_payload(
         story_id,
         to_trust_payload=lambda signal: get_agent().to_trust_payload(signal),
     )
+    if payload is None:
+        return None
+    return TrustPayloadResponse.model_validate(payload)
 
 
-def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
-    return _story_store().list_recent(
+def _build_recent_story_summaries(limit: int, query: str | None = None) -> list[StorySummary]:
+    stories = _story_store().list_recent(
         limit=limit,
         query=query,
         analyze_signal=lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
     )
+    return [StorySummary.model_validate(story) for story in stories]
 
 
-def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> list[dict[str, Any]]:
-    return PersistedStoryClusterService(reader=_reader()).list_recent(
+def _build_recent_cluster_summaries(limit: int, query: str | None = None) -> list[ClusterSummary]:
+    clusters = PersistedStoryClusterService(reader=_reader()).list_recent(
         limit=limit,
         query=query,
         analyze_signal=lambda signal: get_agent().analyze(signal.model_dump(mode="json")),
         cluster_id_prefix="recent-cluster",
     )
+    return [ClusterSummary.model_validate(cluster) for cluster in clusters]
 
 
 def _build_recent_signals(
@@ -181,8 +199,8 @@ def _build_recent_signals(
     from_date: datetime | None = None,
     to_date: datetime | None = None,
     cursor: str | None = None,
-) -> dict[str, Any]:
-    return _signal_store().list_recent_page(
+) -> PersistedSignalPage:
+    page = _signal_store().list_recent_page(
         limit=limit,
         query=query,
         story_id=story_id,
@@ -190,12 +208,18 @@ def _build_recent_signals(
         to_date=to_date,
         cursor=cursor,
     )
+    return PersistedSignalPage.model_validate(
+        {
+            **page,
+            "source": "persisted",
+        }
+    )
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     message = exc.detail if isinstance(exc.detail, str) else "Request failed"
-    return _json_error(exc.status_code, "http_error", message)
+    return _json_error(exc.status_code, _error_code_for_status(exc.status_code), message)
 
 
 @app.exception_handler(RequestValidationError)
@@ -226,9 +250,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     tags=["system"],
     summary="Health check",
     description="Lightweight liveness probe for load balancers and local service checks.",
+    response_model=HealthPayload,
 )
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "news-agent"}
+async def health() -> HealthPayload:
+    return HealthPayload()
 
 
 @app.get(
@@ -236,16 +261,19 @@ async def health() -> dict[str, str]:
     tags=["system"],
     summary="Readiness and storage status",
     description="Reports whether the agent is initialized and whether persisted storage is writable.",
+    response_model=ReadinessPayload,
 )
 async def readiness() -> ReadinessPayload:
     ready = _agent is not None
     storage = _story_store().readiness()
-    return {
-        "status": "ok" if ready and storage["data_dir_writable"] else "degraded",
-        "service": "news-agent",
-        "ready": ready,
-        **storage,
-    }
+    return ReadinessPayload.model_validate(
+        {
+            "status": "ok" if ready and storage["data_dir_writable"] else "degraded",
+            "service": "news-agent",
+            "ready": ready,
+            **storage,
+        }
+    )
 
 
 @app.get(
@@ -269,7 +297,7 @@ async def get_signals(
     persisted: bool = Query(False),
     story_id: str | None = Query(None, min_length=1, max_length=1000),
     cursor: str | None = Query(None, min_length=1, max_length=1000),
-) -> dict[str, Any]:
+) -> LiveSignalResponse | PersistedSignalPage:
     """Fetch live news signals or retrieve persisted signal artifacts."""
     if from_date and to_date and from_date > to_date:
         raise HTTPException(status_code=400, detail="from_date must be <= to_date")
@@ -282,7 +310,7 @@ async def get_signals(
                 raise HTTPException(status_code=400, detail="cursor must be a valid persisted signals cursor") from exc
 
         logger.info("GET /signals persisted=true query=%r story_id=%r limit=%d cursor=%r", query, story_id, limit, cursor)
-        page = _build_recent_signals(
+        return _build_recent_signals(
             limit=limit,
             query=query,
             story_id=story_id,
@@ -290,10 +318,6 @@ async def get_signals(
             to_date=to_date,
             cursor=cursor,
         )
-        return {
-            **page,
-            "source": "persisted",
-        }
 
     if not query:
         raise HTTPException(status_code=422, detail="query is required unless persisted=true")
@@ -307,11 +331,13 @@ async def get_signals(
         limit=limit,
     )
     trust_result = agent.analyze(signal.model_dump())
-    return {
-        "signal": signal.model_dump(mode="json"),
-        "trust": trust_result,
-        "source": "live",
-    }
+    return LiveSignalResponse.model_validate(
+        {
+            "signal": signal.model_dump(mode="json"),
+            "trust": trust_result,
+            "source": "live",
+        }
+    )
 
 
 @app.get(
@@ -332,10 +358,7 @@ async def get_recent_stories(
 ) -> StorySummaryListResponse:
     """Return recent persisted story summaries backed by the SQLite sidecar."""
     stories = _build_recent_story_summaries(limit=limit, query=query)
-    return {
-        "stories": stories,
-        "count": len(stories),
-    }
+    return StorySummaryListResponse(stories=stories, count=len(stories))
 
 
 @app.get(
@@ -356,10 +379,7 @@ async def get_recent_clusters(
 ) -> ClusterSummaryListResponse:
     """Return recent persisted cluster summaries backed by persisted signals."""
     clusters = _build_recent_cluster_summaries(limit=limit, query=query)
-    return {
-        "clusters": clusters,
-        "count": len(clusters),
-    }
+    return ClusterSummaryListResponse(clusters=clusters, count=len(clusters))
 
 
 @app.get(
@@ -374,7 +394,7 @@ async def get_recent_clusters(
     response_model=TrustPayloadResponse,
     responses=API_ERROR_RESPONSES,
 )
-async def get_trust(story_id: str) -> dict[str, Any]:
+async def get_trust(story_id: str) -> TrustPayloadResponse:
     """Get trust payload for a specific story.
 
     This endpoint is consumed by tollama's HttpNewsConnector
@@ -398,7 +418,7 @@ async def get_trust(story_id: str) -> dict[str, Any]:
     response_model=NormalizedTrustResult,
     responses=API_ERROR_RESPONSES,
 )
-async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
+async def analyze_text(request: AnalyzeRequest) -> NormalizedTrustResult:
     """Analyze arbitrary text for news trust signals."""
     agent = get_agent()
     result = agent.analyze({
@@ -406,7 +426,7 @@ async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
         "source_name": "user_input",
         "query": request.query,
     })
-    return result
+    return NormalizedTrustResult.model_validate(result)
 
 
 # Compatibility alias for tollama HttpNewsConnector (GET /stories/{id})
@@ -419,7 +439,7 @@ async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:
     response_model=TrustPayloadResponse,
     responses=API_ERROR_RESPONSES,
 )
-async def stories_compat(story_id: str) -> dict[str, Any]:
+async def stories_compat(story_id: str) -> TrustPayloadResponse:
     """Compatibility endpoint for tollama's HttpNewsConnector."""
     return await get_trust(story_id)
 

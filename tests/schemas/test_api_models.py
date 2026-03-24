@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from agents.news_agent import NewsAgent
-from schemas.api_models import ErrorEnvelope, LiveSignalResponse, NormalizedTrustResult, TrustPayloadResponse
+from schemas.api_models import (
+    ErrorEnvelope,
+    HealthPayload,
+    LiveSignalResponse,
+    NormalizedTrustResult,
+    TrustPayloadResponse,
+)
 from schemas.signals import NewsSignal
 
 
@@ -28,6 +34,13 @@ def _make_signal() -> NewsSignal:
         article_count=3,
         query="fed rates",
     )
+
+
+def test_health_payload_has_stable_defaults():
+    payload = HealthPayload.model_validate({})
+
+    assert payload.status == "ok"
+    assert payload.service == "news-agent"
 
 
 def test_normalized_trust_result_accepts_agent_output():
@@ -67,6 +80,18 @@ def test_trust_payload_response_accepts_story_payload():
 
     assert payload.story_id == signal.story_id
     assert payload.freshness_score == signal.freshness_score
+
+
+def test_trust_payload_response_accepts_numeric_components():
+    payload = TrustPayloadResponse.model_validate(
+        {
+            "story_id": "story-legacy",
+            "contradiction_score": 0.05,
+            "components": {"contradiction_penalty": 0.95},
+        }
+    )
+
+    assert payload.components == {"contradiction_penalty": 0.95}
 
 
 def test_error_envelope_accepts_validation_error_details():

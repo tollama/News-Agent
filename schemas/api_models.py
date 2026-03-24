@@ -9,6 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from schemas.signals import NewsSignal
 
 
+class HealthPayload(BaseModel):
+    """Lightweight liveness payload for product and infrastructure probes."""
+
+    status: Literal["ok"] = Field(default="ok", examples=["ok"])
+    service: Literal["news-agent"] = Field(default="news-agent", examples=["news-agent"])
+
+
 class PersistedSignalRow(BaseModel):
     """Consumer-facing row returned from persisted signal reads."""
 
@@ -179,7 +186,7 @@ class TrustPayloadResponse(BaseModel):
     trust_score: float | None = Field(default=None, ge=0.0, le=1.0)
     risk_category: str | None = None
     calibration_status: str | None = None
-    components: dict[str, Any] | None = None
+    components: dict[str, float] | None = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -231,6 +238,7 @@ __all__ = [
     "ErrorBody",
     "ErrorDetail",
     "ErrorEnvelope",
+    "HealthPayload",
     "LiveSignalResponse",
     "NormalizedTrustResult",
     "PersistedSignalPage",

@@ -132,13 +132,27 @@ Example live response:
     "query": "fed rates"
   },
   "trust": {
+    "agent_name": "news_agent",
+    "domain": "news",
     "trust_score": 0.82,
     "risk_category": "low",
     "calibration_status": "well_calibrated",
-    "components": {
-      "source_credibility": 0.91,
-      "corroboration": 0.78,
-      "contradiction_penalty": 0.04
+    "component_breakdown": {
+      "source_credibility": {"score": 0.91, "weight": 0.35},
+      "corroboration": {"score": 0.78, "weight": 0.25},
+      "contradiction_penalty": {"score": 0.96, "weight": 0.10}
+    },
+    "violations": [],
+    "why_trusted": "Trust score 0.82: strongest factor is source_credibility (91%), weakest is contradiction_penalty (96%), based on 6 article(s).",
+    "evidence": {
+      "source_type": "news_feed",
+      "source_ids": ["fed-rates-2026-03-24"],
+      "freshness_seconds": 45.0
+    },
+    "audit": {
+      "formula_version": "v1",
+      "generated_at": "2026-03-24T12:00:03+00:00",
+      "agent_version": "0.1.0"
     }
   },
   "source": "live"
