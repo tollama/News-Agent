@@ -12,15 +12,18 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
 from agents.news_agent import NewsAgent
 from schemas.api_models import (
+    AnalyzeRequest,
     ClusterSummaryListResponse,
+    ErrorEnvelope,
     LiveSignalResponse,
+    NormalizedTrustResult,
     PersistedSignalPage,
     ReadinessPayload,
     StorySummaryListResponse,
+    TrustPayloadResponse,
 )
 from services.persisted_story_clusters import PersistedStoryClusterService
 from storage.persisted_signals import PersistedSignalStore, decode_persisted_signal_cursor
@@ -59,43 +62,6 @@ app = FastAPI(
         "consumed by Tollama connectors and internal product clients."
     ),
 )
-
-
-class ErrorBody(BaseModel):
-    """Normalized error payload returned by API routes."""
-
-    code: str = Field(description="Stable machine-readable error code", examples=["validation_error"])
-    message: str = Field(description="Human-readable error message")
-    details: list[dict[str, Any]] | None = Field(default=None, description="Optional validation details")
-
-
-class ErrorEnvelope(BaseModel):
-    """Top-level error envelope."""
-
-    error: ErrorBody
-
-
-class AnalyzeRequest(BaseModel):
-    """Request body for /analyze endpoint."""
-
-    text: str = Field(description="Freeform text or headline to score", examples=["Federal Reserve holds rates steady"])
-    query: str = Field(default="", description="Optional user/search query context", examples=["fed rates"])
-
-
-class TrustPayloadResponse(BaseModel):
-    """Normalized trust payload shape returned for a persisted story."""
-
-    story_id: str
-    source_credibility: float | None = None
-    corroboration: float | None = None
-    contradiction_score: float | None = None
-    propagation_delay_seconds: float | None = None
-    freshness_score: float | None = None
-    novelty: float | None = None
-    trust_score: float | None = None
-    risk_category: str | None = None
-    calibration_status: str | None = None
-    components: dict[str, Any] | None = None
 
 
 API_ERROR_RESPONSES = {
@@ -429,6 +395,7 @@ async def get_trust(story_id: str) -> dict[str, Any]:
     tags=["trust"],
     summary="Analyze arbitrary text into a trust result",
     description="Scores a caller-provided headline or text fragment without fetching external articles.",
+    response_model=NormalizedTrustResult,
     responses=API_ERROR_RESPONSES,
 )
 async def analyze_text(request: AnalyzeRequest) -> dict[str, Any]:

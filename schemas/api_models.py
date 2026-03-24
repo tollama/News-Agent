@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -106,24 +106,141 @@ class PersistedSignalPage(BaseModel):
     count: int
     has_more: bool
     next_cursor: str | None = None
-    source: str = Field(default="persisted", examples=["persisted"])
+    source: Literal["persisted"] = Field(default="persisted", examples=["persisted"])
+
+
+class TrustComponent(BaseModel):
+    """One weighted component contributing to the normalized trust score."""
+
+    model_config = ConfigDict(extra="allow")
+
+    score: float = Field(ge=0.0, le=1.0)
+    weight: float = Field(ge=0.0)
+
+
+class TrustEvidence(BaseModel):
+    """Evidence summary associated with a trust result."""
+
+    model_config = ConfigDict(extra="allow")
+
+    source_type: str
+    source_ids: list[str] = Field(default_factory=list)
+    freshness_seconds: float | None = Field(default=None, ge=0.0)
+
+
+class TrustAudit(BaseModel):
+    """Audit metadata for a generated trust result."""
+
+    model_config = ConfigDict(extra="allow")
+
+    formula_version: str
+    generated_at: str
+    agent_version: str
+
+
+class TrustViolation(BaseModel):
+    """Validation or policy violation flagged during trust scoring."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    severity: str
+
+
+class NormalizedTrustResult(BaseModel):
+    """Product-facing normalized trust result returned by live/analyze endpoints."""
+
+    model_config = ConfigDict(extra="allow")
+
+    agent_name: str
+    domain: str
+    trust_score: float = Field(ge=0.0, le=1.0)
+    risk_category: str
+    calibration_status: str
+    component_breakdown: dict[str, TrustComponent]
+    violations: list[TrustViolation] = Field(default_factory=list)
+    why_trusted: str
+    evidence: TrustEvidence
+    audit: TrustAudit
+
+
+class TrustPayloadResponse(BaseModel):
+    """Normalized trust payload shape returned for a persisted story."""
+
+    model_config = ConfigDict(extra="allow")
+
+    story_id: str = Field(min_length=1)
+    source_credibility: float | None = Field(default=None, ge=0.0, le=1.0)
+    corroboration: float | None = Field(default=None, ge=0.0, le=1.0)
+    contradiction_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    propagation_delay_seconds: float | None = Field(default=None, ge=0.0)
+    freshness_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    novelty: float | None = Field(default=None, ge=0.0, le=1.0)
+    trust_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    risk_category: str | None = None
+    calibration_status: str | None = None
+    components: dict[str, Any] | None = None
+
+
+class AnalyzeRequest(BaseModel):
+    """Request body for /analyze endpoint."""
+
+    text: str = Field(description="Freeform text or headline to score", examples=["Federal Reserve holds rates steady"])
+    query: str = Field(default="", description="Optional user/search query context", examples=["fed rates"])
+
+
+class ErrorDetail(BaseModel):
+    """Structured error detail row, especially for validation failures."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str | None = None
+    loc: list[str | int] | None = None
+    msg: str | None = None
+    input: Any | None = None
+    ctx: dict[str, Any] | None = None
+    url: str | None = None
+
+
+class ErrorBody(BaseModel):
+    """Normalized error payload returned by API routes."""
+
+    code: str = Field(description="Stable machine-readable error code", examples=["validation_error"])
+    message: str = Field(description="Human-readable error message")
+    details: list[ErrorDetail] | None = Field(default=None, description="Optional validation details")
+
+
+class ErrorEnvelope(BaseModel):
+    """Top-level error envelope."""
+
+    error: ErrorBody
 
 
 class LiveSignalResponse(BaseModel):
     """Live signal analysis returned by GET /api/v1/news/signals."""
 
     signal: NewsSignal
-    trust: dict[str, Any]
-    source: str = Field(default="live", examples=["live"])
+    trust: NormalizedTrustResult
+    source: Literal["live"] = Field(default="live", examples=["live"])
 
 
 __all__ = [
+    "AnalyzeRequest",
     "ClusterSummary",
     "ClusterSummaryListResponse",
+    "ErrorBody",
+    "ErrorDetail",
+    "ErrorEnvelope",
     "LiveSignalResponse",
+    "NormalizedTrustResult",
     "PersistedSignalPage",
     "PersistedSignalRow",
     "ReadinessPayload",
     "StorySummary",
     "StorySummaryListResponse",
+    "TrustAudit",
+    "TrustComponent",
+    "TrustEvidence",
+    "TrustPayloadResponse",
+    "TrustViolation",
 ]

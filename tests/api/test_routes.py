@@ -721,6 +721,15 @@ def test_openapi_documents_product_facing_route_metadata(client):
     trust_operation = schema["paths"]["/api/v1/news/trust/{story_id}"]["get"]
     assert trust_operation["summary"] == "Fetch a normalized trust payload for one story"
     assert trust_operation["tags"] == ["trust"]
+    trust_response = trust_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert trust_response["$ref"] == "#/components/schemas/TrustPayloadResponse"
+
+    analyze_operation = schema["paths"]["/api/v1/news/analyze"]["post"]
+    assert analyze_operation["summary"] == "Analyze arbitrary text into a trust result"
+    analyze_request = analyze_operation["requestBody"]["content"]["application/json"]["schema"]
+    assert analyze_request["$ref"] == "#/components/schemas/AnalyzeRequest"
+    analyze_response = analyze_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert analyze_response["$ref"] == "#/components/schemas/NormalizedTrustResult"
 
     readiness_response = schema["paths"]["/api/v1/news/ready"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert readiness_response["$ref"] == "#/components/schemas/ReadinessPayload"
@@ -746,3 +755,9 @@ def test_openapi_exposes_union_response_for_live_and_persisted_signals(client):
     persisted_signal_page = schema["components"]["schemas"]["PersistedSignalPage"]
     persisted_signal_rows = persisted_signal_page["properties"]["signals"]["items"]
     assert persisted_signal_rows["$ref"] == "#/components/schemas/PersistedSignalRow"
+
+    live_signal_response = schema["components"]["schemas"]["LiveSignalResponse"]
+    assert live_signal_response["properties"]["trust"]["$ref"] == "#/components/schemas/NormalizedTrustResult"
+
+    error_envelope = schema["components"]["schemas"]["ErrorEnvelope"]
+    assert error_envelope["properties"]["error"]["$ref"] == "#/components/schemas/ErrorBody"
