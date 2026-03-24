@@ -722,6 +722,15 @@ def test_openapi_documents_product_facing_route_metadata(client):
     assert trust_operation["summary"] == "Fetch a normalized trust payload for one story"
     assert trust_operation["tags"] == ["trust"]
 
+    readiness_response = schema["paths"]["/api/v1/news/ready"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert readiness_response["$ref"] == "#/components/schemas/ReadinessPayload"
+
+    stories_response = schema["paths"]["/api/v1/news/stories/recent"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert stories_response["$ref"] == "#/components/schemas/StorySummaryListResponse"
+
+    clusters_response = schema["paths"]["/api/v1/news/clusters/recent"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert clusters_response["$ref"] == "#/components/schemas/ClusterSummaryListResponse"
+
 
 def test_openapi_exposes_union_response_for_live_and_persisted_signals(client):
     response = client.get("/openapi.json")
@@ -733,3 +742,7 @@ def test_openapi_exposes_union_response_for_live_and_persisted_signals(client):
     refs = {option["$ref"] for option in options}
     assert "#/components/schemas/LiveSignalResponse" in refs
     assert "#/components/schemas/PersistedSignalPage" in refs
+
+    persisted_signal_page = schema["components"]["schemas"]["PersistedSignalPage"]
+    persisted_signal_rows = persisted_signal_page["properties"]["signals"]["items"]
+    assert persisted_signal_rows["$ref"] == "#/components/schemas/PersistedSignalRow"

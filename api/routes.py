@@ -15,6 +15,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agents.news_agent import NewsAgent
+from schemas.api_models import (
+    ClusterSummaryListResponse,
+    LiveSignalResponse,
+    PersistedSignalPage,
+    ReadinessPayload,
+    StorySummaryListResponse,
+)
 from services.persisted_story_clusters import PersistedStoryClusterService
 from storage.persisted_signals import PersistedSignalStore, decode_persisted_signal_cursor
 from storage.persisted_stories import PersistedStoryStore
@@ -73,38 +80,6 @@ class AnalyzeRequest(BaseModel):
 
     text: str = Field(description="Freeform text or headline to score", examples=["Federal Reserve holds rates steady"])
     query: str = Field(default="", description="Optional user/search query context", examples=["fed rates"])
-
-
-class PersistedSignalPage(BaseModel):
-    """Persisted signals page returned by GET /api/v1/news/signals?persisted=true."""
-
-    signals: list[dict[str, Any]]
-    count: int
-    has_more: bool
-    next_cursor: str | None = None
-    source: str = Field(default="persisted", examples=["persisted"])
-
-
-class LiveSignalResponse(BaseModel):
-    """Live signal analysis returned by GET /api/v1/news/signals."""
-
-    signal: dict[str, Any]
-    trust: dict[str, Any]
-    source: str = Field(default="live", examples=["live"])
-
-
-class RecentStoriesResponse(BaseModel):
-    """Recent persisted story summaries."""
-
-    stories: list[dict[str, Any]]
-    count: int
-
-
-class RecentClustersResponse(BaseModel):
-    """Recent persisted cluster summaries."""
-
-    clusters: list[dict[str, Any]]
-    count: int
 
 
 class TrustPayloadResponse(BaseModel):
@@ -296,7 +271,7 @@ async def health() -> dict[str, str]:
     summary="Readiness and storage status",
     description="Reports whether the agent is initialized and whether persisted storage is writable.",
 )
-async def readiness() -> dict[str, Any]:
+async def readiness() -> ReadinessPayload:
     ready = _agent is not None
     storage = _story_store().readiness()
     return {
@@ -382,13 +357,13 @@ async def get_signals(
         "Returns consumer-friendly story summary rows backed by persisted artifacts, "
         "including trust rollups when available."
     ),
-    response_model=RecentStoriesResponse,
+    response_model=StorySummaryListResponse,
     responses=API_ERROR_RESPONSES,
 )
 async def get_recent_stories(
     limit: int = Query(10, ge=1, le=100),
     query: str | None = Query(None, min_length=1, max_length=500),
-) -> dict[str, Any]:
+) -> StorySummaryListResponse:
     """Return recent persisted story summaries backed by the SQLite sidecar."""
     stories = _build_recent_story_summaries(limit=limit, query=query)
     return {
@@ -406,13 +381,13 @@ async def get_recent_stories(
         "Returns recent event/story cluster summaries backed by explicit cluster artifacts "
         "or reconstructed from persisted signals when needed."
     ),
-    response_model=RecentClustersResponse,
+    response_model=ClusterSummaryListResponse,
     responses=API_ERROR_RESPONSES,
 )
 async def get_recent_clusters(
     limit: int = Query(10, ge=1, le=100),
     query: str | None = Query(None, min_length=1, max_length=500),
-) -> dict[str, Any]:
+) -> ClusterSummaryListResponse:
     """Return recent persisted cluster summaries backed by persisted signals."""
     clusters = _build_recent_cluster_summaries(limit=limit, query=query)
     return {
